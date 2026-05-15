@@ -4,9 +4,9 @@
       <div class="col-12 col-md-6">
         <p class="section-label">Participate</p>
         <h2 class="section-title mb-3">Join the hackathon</h2>
-        <p class="section-body">
-          Whether you are an analyst or biological scientist experienced in Cell Painting, a software developer, computational biologist, or ML researcher: if you work at the intersection of Cell Painting and single-cell biology, this event is for you. Apply below or reach out with any questions.
-        </p>
+        <div class="section-body">
+          {{ with site.GetPage "contact" }}{{ .Content }}{{ end }}
+        </div>
         {{ with .Site.Params.cta }}
           <div class="mt-4">
             <a href="{{ .url }}" class="btn-accent">{{ .label }}</a>
