@@ -1,14 +1,14 @@
 # Each workstream appears as a card on the homepage.
 # Remove all entries to hide the section.
 # 'lead' is a GitHub username — their avatar is shown automatically.
-- title: "WORKSTREAM #1"
-  description: "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat."
+- title: "Curation of Datasets"
+  description: "Identifying, collecting, and preparing MS-based single-cell proteomics datasets to start a community-curated resource for testing analysis strategies and benchmarking methods such as imputation or normalization. Establishing AnnData format from the scverse ecosystem as the main object for benchmarking and analysis."
+  lead: "Florian Mutschler"
+
+- title: "Data QC and Preprocessing"
+  description: "Identifying best practices for analyzing different types of MS-based single-cell proteomics datasets. Including: QC metrics, imputation strategies, normalization approaches, and methods for handling biological and technical confounders such as cell cycle, cell size, and batch effects. We aim to prototype methods in a service-styled package, to deal with these problems."
   lead: "josenimo"
 
-- title: "WORKSTREAM #2"
-  description: "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat."
-  lead: ""
-
-- title: "WORKSTREAM #3"
-  description: "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat."
-  lead: ""
+- title: "Downstream analysis"
+  description: "Come together, think and benchmark different challenges during downstream analysis. How to perform feature selection? How can we use proteomics for cell type annotation?"
+  lead: "Anna Sophie Welter"

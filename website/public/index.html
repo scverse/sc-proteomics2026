@@ -144,9 +144,10 @@
         <p class="section-label">About the event</p>
         <h2 class="section-title mb-3">scverse x single-cell proteomics 2026</h2>
         <div class="section-body">
-          <p>&ldquo;Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.&rdquo;</p>
-<p><strong>For Cell Painting practitioners:</strong> &ldquo;Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.&rdquo;</p>
-<p><strong>For ML researchers:</strong> &ldquo;Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.&rdquo; REFERENCES HERE FOR COOL PAPERS</p>
+          <p>With recent advances in mass spectrometry, MS based single-cell proteomics is now able to identify thousands of proteins in one cell. However, there are still challenges: lack of good benchmarking data sets, missing standards for  normalization and analysis strategies. This hackathon wants to bring together the MS-based single-cell proteomics community and scverse to address these challenges. In a two day event at the Vienna BioCenter we want to discuss and work on three main topics: curated datasets, data processing, and downstream analysis.</p>
+<p>For this purpose, we explicitly welcome scientists with experience in MS based low input / single cell proteomics, alongside software developers, bioinformaticians and computational biologists. Since it is the first event for the MS-based sc community the scope will be very open. Let’s come together to identify challenges and opportunities. As a rough direction you can check the workstreams. Our main goal is to build a community that joins forces also beyond this event to select and provide curated datasets that can be used to benchmark workflows and methods, discussing analysis strategies and also providing functionality in form of software solutions.</p>
+<p><strong>For MS-based single-cell proteomics (SCP) practitioners:</strong> Active participation in this community will foster collaborative problem-solving and the establishment of community-curated, standardized datasets. This framework will streamline the testing and validation of analyses, significantly reducing methodological overhead. Ultimately, this increased rigor and efficiency will empower the community to dedicate greater time and resources to deeper biological interpretation and scientific breakthrough.</p>
+<p><strong>For computational biologists and developers:</strong> The stage of MS-based SCP currently transfers analytical solutions from single-cell transcriptomics. However, the distinct characteristics of protein data compared to transcript data; especially regarding data sparsity, dynamic range, and technical variability; demand purpose-built methodologies. This challenge represents a critical opportunity to apply your expertise in developing scalable computational approaches that can manage complex datasets, ensuring method reproducibility and establishing new gold standards for data analysis in the field.</p>
 
         </div>
         
@@ -225,15 +226,31 @@
     </div>
 
     <div class="section-intro">
-      <p>Closer to the event, we will publish a set of actionable tasks grouped into these three workstreams. You will later decide which task fits your expertise and interests best. Participants will group around these tasks and then work as a team toward a concrete, shippable outcome over the two days. Workstreams are topically distinct but not siloed: cross-workstream collaboration is encouraged wherever tools or data overlap.</p>
+      <p>Closer to the event, we will form working groups and coordinate preparations via Zulip. Since dedicated benchmarking datasets are not yet available, we will need to identify and prepare suitable datasets in advance so that participants can get started quickly during the hackathon.</p>
+<p>If you have additional workstream ideas, please get in touch with us!</p>
 
     </div>
 
     <div class="workstreams-grid">
       
         <article class="workstream-card">
-          <h3 class="workstream-card__title">WORKSTREAM #1</h3>
-          <p class="workstream-card__desc">Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</p>
+          <h3 class="workstream-card__title">Curation of Datasets</h3>
+          <p class="workstream-card__desc">Identifying, collecting, and preparing MS-based single-cell proteomics datasets to start a community-curated resource for testing analysis strategies and benchmarking methods such as imputation or normalization. Establishing AnnData format from the scverse ecosystem as the main object for benchmarking and analysis.</p>
+          
+            <div class="workstream-card__lead">
+              <img
+                src="https://github.com/Florian%20Mutschler.png?size=48"
+                alt="Florian Mutschler"
+                loading="lazy"
+              />
+              <span>@Florian Mutschler</span>
+            </div>
+          
+        </article>
+      
+        <article class="workstream-card">
+          <h3 class="workstream-card__title">Data QC and Preprocessing</h3>
+          <p class="workstream-card__desc">Identifying best practices for analyzing different types of MS-based single-cell proteomics datasets. Including: QC metrics, imputation strategies, normalization approaches, and methods for handling biological and technical confounders such as cell cycle, cell size, and batch effects. We aim to prototype methods in a service-styled package, to deal with these problems.</p>
           
             <div class="workstream-card__lead">
               <img
@@ -247,14 +264,17 @@
         </article>
       
         <article class="workstream-card">
-          <h3 class="workstream-card__title">WORKSTREAM #2</h3>
-          <p class="workstream-card__desc">Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</p>
+          <h3 class="workstream-card__title">Downstream analysis</h3>
+          <p class="workstream-card__desc">Come together, think and benchmark different challenges during downstream analysis. How to perform feature selection? How can we use proteomics for cell type annotation?</p>
           
-        </article>
-      
-        <article class="workstream-card">
-          <h3 class="workstream-card__title">WORKSTREAM #3</h3>
-          <p class="workstream-card__desc">Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</p>
+            <div class="workstream-card__lead">
+              <img
+                src="https://github.com/Anna%20Sophie%20Welter.png?size=48"
+                alt="Anna Sophie Welter"
+                loading="lazy"
+              />
+              <span>@Anna Sophie Welter</span>
+            </div>
           
         </article>
       
@@ -644,6 +664,20 @@
       </div>
       
 
+      
+      <div class="partners-sponsors-col">
+        <div class="section-header">
+          <p class="section-label">Made possible by</p>
+          <h2 class="section-title">Sponsors</h2>
+        </div>
+        <div class="sponsors-grid">
+          
+            <a href="" class="sponsor-item" target="_blank" rel="noopener" title="Looking for Sponsors">
+              <img src="/sc-proteomics2026/" alt="Looking for Sponsors" loading="lazy" />
+            </a>
+          
+        </div>
+      </div>
       
 
     </div>
