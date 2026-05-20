@@ -6,8 +6,8 @@ title = "scverse x single-cell proteomics"
 [params]
   eventName     = "scverse x single-cell proteomics 2026"
   eventSeries   = "Unifying Omics Hackathon Series"
-  eventTagline  = "Bridging scverse and MS-based single cell proteomics community at ESCP2026."
-  eventDates    = "September 4 - 5, 2026"
+  eventTagline  = "Bridging scverse and MS-based single-cell proteomics community at ESCP2026."
+  eventDates    = "ESCP extension: September 4 - 5, 2026"
   eventStart    = "2026-09-04"  # ISO date — used for calendar links
   eventEnd      = "2026-09-05"
   eventLocation = "Vienna, Austria"
