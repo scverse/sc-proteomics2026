@@ -2,13 +2,33 @@
 # Remove all entries to hide the section.
 # 'lead' is a GitHub username — their avatar is shown automatically.
 - title: "Curation of Datasets"
-  description: "Identifying, collecting, and preparing MS-based single-cell proteomics datasets to start a community-curated resource for testing analysis strategies and benchmarking methods such as imputation or normalization. Establishing AnnData format from the scverse ecosystem as the main object for benchmarking and analysis."
+  description: "Define criteria for high-quality benchmark datasets and establish a curated resource for evaluating and comparing computational methods"
   lead: "Florian Mutschler"
 
-- title: "Data QC and Preprocessing"
-  description: "Identifying best practices for analyzing different types of MS-based single-cell proteomics datasets. Including: QC metrics, imputation strategies, normalization approaches, and methods for handling biological and technical confounders such as cell cycle, cell size, and batch effects. We aim to prototype methods in a service-styled package, to deal with these problems."
-  lead: "josenimo"
-
-- title: "Downstream analysis"
-  description: "Come together, think and benchmark different challenges during downstream analysis. How to perform feature selection? How can we use proteomics for cell type annotation?"
+- title: "Cell Cycle Annotation"
+  description: "Develop and benchmark methods to classify or infer cell-cycle states from single-cell proteomics data, including classification, pseudotime, and regression approaches"
   lead: "Anna Sophie Welter"
+
+- title: "Cell Type Annotation"
+  description: "We will investigate how individual choices within the annotation pipeline—such as dimensionality reduction, clustering resolution, and marker set selection—affect the final results. We will also evaluate how different annotation strategies, including marker-based, reference-based, and probabilistic approaches, influence cell type assignments"
+  lead: "sarahszvetecz"
+
+- title: "New Imputation Methods"
+  description: "Develop a new statistical approach for handling missing values in multi-cell-type proteomics data, with a focus on identifying and modeling different types of missingness"
+  lead: "Yasat Hacibaloglu"
+
+- title: "Analysis Quality Metrics"
+  description: "Establish consensus metrics and evaluation strategies to assess the quality and biological meaningfulness of preprocessing, normalization, imputation, and downstream analysis"
+  lead: "lucas-diedrich"
+
+- title: "Match Between Runs (MBR)"
+  description: "Investigate how match-between-runs affects downstream single-cell proteomics analyses and develop practical guidance for its use, including whether bulk-proteomics approaches require adaptation for SCP"
+  lead: "Sonja-Stockhaus"
+
+- title: "scpdata Integration"
+  description: "Expand the scpdata package with additional single-cell proteomics datasets and enable interoperability between R and other programming languages"
+  lead: "lgatto"
+
+- title: "Filtering & Batch Correction" 
+  description: "Develop benchmarkable approaches for filtering and quality control, including methods to assess and improve batch-correction results"
+  lead: "LOOKING FOR ONE"
