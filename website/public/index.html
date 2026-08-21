@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en-us">
   <head>
-	<meta name="generator" content="Hugo 0.163.1"><script src="/sc-proteomics2026/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=sc-proteomics2026/livereload" data-no-instant defer></script>
+	<meta name="generator" content="Hugo 0.165.0"><script src="/sc-proteomics2026/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=sc-proteomics2026/livereload" data-no-instant defer></script>
     
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -235,7 +235,7 @@
       
         <article class="workstream-card">
           <h3 class="workstream-card__title">Curation of Datasets</h3>
-          <p class="workstream-card__desc">Identifying, collecting, and preparing MS-based single-cell proteomics datasets to start a community-curated resource for testing analysis strategies and benchmarking methods such as imputation or normalization. Establishing AnnData format from the scverse ecosystem as the main object for benchmarking and analysis.</p>
+          <p class="workstream-card__desc">Define criteria for high-quality benchmark datasets and establish a curated resource for evaluating and comparing computational methods</p>
           
             <div class="workstream-card__lead">
               <img
@@ -249,23 +249,8 @@
         </article>
       
         <article class="workstream-card">
-          <h3 class="workstream-card__title">Data QC and Preprocessing</h3>
-          <p class="workstream-card__desc">Identifying best practices for analyzing different types of MS-based single-cell proteomics datasets. Including: QC metrics, imputation strategies, normalization approaches, and methods for handling biological and technical confounders such as cell cycle, cell size, and batch effects. We aim to prototype methods in a service-styled package, to deal with these problems.</p>
-          
-            <div class="workstream-card__lead">
-              <img
-                src="https://github.com/josenimo.png?size=48"
-                alt="josenimo"
-                loading="lazy"
-              />
-              <span>@josenimo</span>
-            </div>
-          
-        </article>
-      
-        <article class="workstream-card">
-          <h3 class="workstream-card__title">Downstream analysis</h3>
-          <p class="workstream-card__desc">Come together, think and benchmark different challenges during downstream analysis. How to perform feature selection? How can we use proteomics for cell type annotation?</p>
+          <h3 class="workstream-card__title">Cell Cycle Annotation</h3>
+          <p class="workstream-card__desc">Develop and benchmark methods to classify or infer cell-cycle states from single-cell proteomics data, including classification, pseudotime, and regression approaches</p>
           
             <div class="workstream-card__lead">
               <img
@@ -274,6 +259,96 @@
                 loading="lazy"
               />
               <span>@Anna Sophie Welter</span>
+            </div>
+          
+        </article>
+      
+        <article class="workstream-card">
+          <h3 class="workstream-card__title">Cell Type Annotation</h3>
+          <p class="workstream-card__desc">We will investigate how individual choices within the annotation pipeline—such as dimensionality reduction, clustering resolution, and marker set selection—affect the final results. We will also evaluate how different annotation strategies, including marker-based, reference-based, and probabilistic approaches, influence cell type assignments</p>
+          
+            <div class="workstream-card__lead">
+              <img
+                src="https://github.com/sarahszvetecz.png?size=48"
+                alt="sarahszvetecz"
+                loading="lazy"
+              />
+              <span>@sarahszvetecz</span>
+            </div>
+          
+        </article>
+      
+        <article class="workstream-card">
+          <h3 class="workstream-card__title">New Imputation Methods</h3>
+          <p class="workstream-card__desc">Develop a new statistical approach for handling missing values in multi-cell-type proteomics data, with a focus on identifying and modeling different types of missingness</p>
+          
+            <div class="workstream-card__lead">
+              <img
+                src="https://github.com/Yasat%20Hacibaloglu.png?size=48"
+                alt="Yasat Hacibaloglu"
+                loading="lazy"
+              />
+              <span>@Yasat Hacibaloglu</span>
+            </div>
+          
+        </article>
+      
+        <article class="workstream-card">
+          <h3 class="workstream-card__title">Analysis Quality Metrics</h3>
+          <p class="workstream-card__desc">Establish consensus metrics and evaluation strategies to assess the quality and biological meaningfulness of preprocessing, normalization, imputation, and downstream analysis</p>
+          
+            <div class="workstream-card__lead">
+              <img
+                src="https://github.com/lucas-diedrich.png?size=48"
+                alt="lucas-diedrich"
+                loading="lazy"
+              />
+              <span>@lucas-diedrich</span>
+            </div>
+          
+        </article>
+      
+        <article class="workstream-card">
+          <h3 class="workstream-card__title">Match Between Runs (MBR)</h3>
+          <p class="workstream-card__desc">Investigate how match-between-runs affects downstream single-cell proteomics analyses and develop practical guidance for its use, including whether bulk-proteomics approaches require adaptation for SCP</p>
+          
+            <div class="workstream-card__lead">
+              <img
+                src="https://github.com/Sonja-Stockhaus.png?size=48"
+                alt="Sonja-Stockhaus"
+                loading="lazy"
+              />
+              <span>@Sonja-Stockhaus</span>
+            </div>
+          
+        </article>
+      
+        <article class="workstream-card">
+          <h3 class="workstream-card__title">scpdata Integration</h3>
+          <p class="workstream-card__desc">Expand the scpdata package with additional single-cell proteomics datasets and enable interoperability between R and other programming languages</p>
+          
+            <div class="workstream-card__lead">
+              <img
+                src="https://github.com/lgatto.png?size=48"
+                alt="lgatto"
+                loading="lazy"
+              />
+              <span>@lgatto</span>
+            </div>
+          
+        </article>
+      
+        <article class="workstream-card">
+          <h3 class="workstream-card__title">Filtering &amp; Batch Correction</h3>
+          <p class="workstream-card__desc">Develop benchmarkable approaches for filtering and quality control, including methods to assess and improve batch-correction results</p>
+          
+            <div class="workstream-card__lead">
+              <img
+                src="https://github.com/LOOKING%20FOR%20ONE.png?size=48"
+                alt="LOOKING FOR ONE"
+                loading="lazy"
+              />
+              <span>@LOOKING FOR ONE</span>
             </div>
           
         </article>
@@ -728,6 +803,10 @@
           
             <a href="https://aptila.bio/" class="sponsor-item" target="_blank" rel="noopener" title="Aptila Biotech">
               <img src="/sc-proteomics2026/img/sponsors/aptilac7.svg" alt="Aptila Biotech" loading="lazy" />
+            </a>
+          
+            <a href="https://ionopticks.com/" class="sponsor-item" target="_blank" rel="noopener" title="IonOpticks">
+              <img src="/sc-proteomics2026/img/sponsors/ionopticksemail.png.webp" alt="IonOpticks" loading="lazy" />
             </a>
           
         </div>
