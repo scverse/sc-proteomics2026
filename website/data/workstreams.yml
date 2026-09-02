@@ -21,10 +21,6 @@
   description: "Establish consensus metrics and evaluation strategies to assess the quality and biological meaningfulness of preprocessing, normalization, imputation, and downstream analysis"
   lead: "lucas-diedrich"
 
-- title: "Match Between Runs (MBR)"
-  description: "Investigate how match-between-runs affects downstream single-cell proteomics analyses and develop practical guidance for its use, including whether bulk-proteomics approaches require adaptation for SCP"
-  lead: "Sonja-Stockhaus"
-
 - title: "scpdata Integration"
   description: "Expand the scpdata package with additional single-cell proteomics datasets and enable interoperability between R and other programming languages"
   lead: "lgatto"
