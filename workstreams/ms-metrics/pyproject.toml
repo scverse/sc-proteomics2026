@@ -1,0 +1,61 @@
+[build-system]
+build-backend = "hatchling.build"
+requires = [ "hatchling" ]
+
+[project]
+name = "msmetrics"
+description = "Metrics and methods for diagnosing and processing single-cell proteomics datasets"
+readme = "README.md"
+maintainers = [
+  { name = "Vincenth Brennsteiner", email = "brennsteiner@biochem.mpg.de" },
+]
+authors = [
+  { name = "MannLabs" },
+]
+requires-python = ">=3.11"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dynamic = [ "version" ]
+
+dependencies = [
+  "alphapepttools",
+  "anndata",
+  "numpy",
+  "pandas",
+]
+optional-dependencies.dev = [
+  "pre-commit",
+]
+optional-dependencies.notebook = [
+  "ipykernel",
+  "ipywidgets",
+]
+optional-dependencies.test = [
+  "nbmake",
+  "pytest",
+]
+urls.Source = "https://github.com/scverse/sc-proteomics2026"
+
+[tool.hatch.version]
+path = "msmetrics/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = [ "msmetrics" ]
+
+[tool.ruff]
+line-length = 120
+extend-include = [ "*.ipynb" ]
+
+format.docstring-code-format = true
+
+lint.pydocstyle.convention = "numpy"
+
+[tool.pytest.ini_options]
+testpaths = [ "tests" ]
+addopts = [
+  "--import-mode=importlib",
+]
