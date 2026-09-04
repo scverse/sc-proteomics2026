@@ -11,3 +11,6 @@ dist/
 # tooling caches
 .pytest_cache/
 .ruff_cache/
+
+# data
+data/
