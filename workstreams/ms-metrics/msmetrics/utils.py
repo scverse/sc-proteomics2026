@@ -1,15 +1,21 @@
 """Metrics for diagnosing the effect of imputation on single-cell proteomics data."""
 
 import warnings
+from collections.abc import Callable
+from inspect import getdoc
+from textwrap import indent
 
 import alphapepttools as apt
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import scanpy as sc
+import scib_metrics
+from anndata import AnnData
+from scib_metrics.nearest_neighbors import NeighborsResults
+from scipy.sparse import csr_matrix
 from scipy.stats import spearmanr
 from sklearn.metrics import pairwise_distances
-from anndata import AnnData
-from scipy.sparse import csr_matrix
 from sklearn.neighbors import NearestNeighbors
 
 
@@ -487,3 +493,329 @@ def compute_neighborhood_preservation(
         adata.obsm[embedding_after],
         n_neighbors=n_neighbors,
     )
+
+
+# --- scib-metrics wrappers ---------------------------------------------------------------------
+#
+# `scib_metrics` takes plain arrays and, for the graph-based metrics, a `NeighborsResults` that the
+# caller has to build. The wrappers below keep that plumbing in one place, so that every metric is
+# called the same way: an `AnnData`, an `.obsm` key for the embedding, and `.obs` columns for the
+# annotations. Each wrapper carries the documentation of the metric it wraps, see `_wraps_scib`.
+
+
+_SCIB_PARAMETER_DOCS = {
+    "adata": "adata\n    Annotated data matrix, holding the embedding in `.obsm` and the annotations in `.obs`.",
+    "embedding_key": (
+        "embedding_key\n    Key in `adata.obsm` of the embedding to score, e.g. `'X_pca'`. Metrics are defined on a\n"
+        "    low-dimensional representation, not on the expression matrix itself."
+    ),
+    "embedding_before": "embedding_before\n    Key in `adata.obsm` of the embedding before the processing step.",
+    "embedding_after": "embedding_after\n    Key in `adata.obsm` of the embedding after the processing step.",
+    "label_key": ("label_key\n    Column in `adata.obs` holding the biological grouping to conserve, e.g. cell type."),
+    "batch_key": (
+        "batch_key\n    Column in `adata.obs` holding the technical grouping to mix, e.g. plate, acquisition day\n"
+        "    or instrument."
+    ),
+    "covariate_key": (
+        "covariate_key\n    Column in `adata.obs` holding the covariate whose explained variance is compared before\n"
+        "    and after the processing step."
+    ),
+    "categorical": (
+        "categorical\n    Whether to one-hot encode the covariate instead of regressing on it directly. By default\n"
+        "    this follows the dtype of the column, so that a discrete covariate such as the plate is\n"
+        "    encoded and a continuous one such as the number of proteins per cell is not."
+    ),
+    "n_neighbors": (
+        "n_neighbors\n    Size of the k-nearest-neighbour graph built from the embedding. The observation itself is\n"
+        "    included, as `scib_metrics` expects. The default is the value the `scib_metrics`\n"
+        "    `Benchmarker` uses for this metric, so that scores are comparable to published ones."
+    ),
+}
+
+
+def _wraps_scib(metric: Callable, *parameters: str) -> Callable:
+    """Append the parameter block and the verbatim `scib_metrics` documentation to a wrapper.
+
+    Restating the documentation of every wrapped metric would leave two descriptions to keep in
+    sync, so the original one is quoted instead and stays correct across `scib_metrics` versions.
+    """
+
+    def decorate(wrapper: Callable) -> Callable:
+        blocks = "\n".join(_SCIB_PARAMETER_DOCS[parameter] for parameter in ("adata", *parameters))
+        original = indent(getdoc(metric) or "No documentation available.", "    ")
+
+        wrapper.__doc__ = (
+            f"{getdoc(wrapper)}\n\n"
+            f"Thin wrapper around :func:`scib_metrics.{metric.__name__}`, which reads the arrays it "
+            f"scores from `adata`.\n\n"
+            f"Parameters\n----------\n{blocks}\n"
+            f"kwargs\n    Forwarded to :func:`scib_metrics.{metric.__name__}`.\n\n"
+            f"Returns\n-------\nAs returned by :func:`scib_metrics.{metric.__name__}`.\n\n"
+            f"Notes\n-----\nDocumentation of :func:`scib_metrics.{metric.__name__}`, verbatim:\n\n"
+            f"{original}\n"
+        )
+        wrapper.wrapped_metric = metric
+        wrapper.required_keys = tuple(p for p in parameters if p.endswith("_key") and not p.startswith("embedding"))
+        return wrapper
+
+    return decorate
+
+
+def _embedding(adata: AnnData, embedding_key: str) -> np.ndarray:
+    """Embedding stored under `embedding_key`, as a dense float array."""
+    if embedding_key not in adata.obsm:
+        raise KeyError(f"`{embedding_key}` is not in `adata.obsm`, available keys are {list(adata.obsm)}.")
+
+    embedding = np.asarray(adata.obsm[embedding_key], dtype=float)
+    if not np.isfinite(embedding).all():
+        raise ValueError(f"`adata.obsm['{embedding_key}']` contains `nan` or `inf`, which no metric can score.")
+    return embedding
+
+
+def _annotation(adata: AnnData, key: str, parameter: str) -> np.ndarray:
+    """Observation annotation stored in `adata.obs[key]`, as a plain array."""
+    if key not in adata.obs:
+        raise KeyError(f"`{parameter}='{key}'` is not in `adata.obs`, available columns are {list(adata.obs)}.")
+
+    annotation = np.asarray(adata.obs[key])
+    if len(np.unique(annotation)) < 2:
+        raise ValueError(f"`{parameter}='{key}'` has a single level; a metric over one group is not informative.")
+    return annotation
+
+
+def _neighbors(embedding: np.ndarray, n_neighbors: int) -> NeighborsResults:
+    """K-nearest-neighbour graph in the format `scib_metrics` expects."""
+    n_obs = embedding.shape[0]
+    if not 2 <= n_neighbors <= n_obs:
+        raise ValueError(f"`n_neighbors` must be between 2 and {n_obs} for {n_obs} observations, got {n_neighbors}.")
+
+    # Passing the embedding back in makes scikit-learn return each observation as its own first
+    # neighbour, which is the convention `NeighborsResults` documents.
+    fitted = NearestNeighbors(n_neighbors=n_neighbors).fit(embedding)
+    distances, indices = fitted.kneighbors(embedding)
+    return NeighborsResults(indices=indices, distances=distances)
+
+
+@_wraps_scib(scib_metrics.silhouette_label, "embedding_key", "label_key")
+def silhouette_label(adata: AnnData, embedding_key: str = "X_pca", *, label_key: str, **kwargs) -> float:
+    """Average silhouette width of the biological labels, higher is better."""
+    return scib_metrics.silhouette_label(
+        _embedding(adata, embedding_key),
+        _annotation(adata, label_key, "label_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.silhouette_batch, "embedding_key", "label_key", "batch_key")
+def silhouette_batch(
+    adata: AnnData, embedding_key: str = "X_pca", *, label_key: str, batch_key: str, **kwargs
+) -> float:
+    """Average silhouette width of the batches within each label, higher means better mixed."""
+    return scib_metrics.silhouette_batch(
+        _embedding(adata, embedding_key),
+        _annotation(adata, label_key, "label_key"),
+        _annotation(adata, batch_key, "batch_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.bras, "embedding_key", "label_key", "batch_key")
+def bras(adata: AnnData, embedding_key: str = "X_pca", *, label_key: str, batch_key: str, **kwargs) -> float:
+    """Batch removal adapted silhouette, combining label separation and batch mixing."""
+    return scib_metrics.bras(
+        _embedding(adata, embedding_key),
+        _annotation(adata, label_key, "label_key"),
+        _annotation(adata, batch_key, "batch_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.isolated_labels, "embedding_key", "label_key", "batch_key")
+def isolated_labels(adata: AnnData, embedding_key: str = "X_pca", *, label_key: str, batch_key: str, **kwargs) -> float:
+    """Silhouette of the labels that appear in the fewest batches, higher is better."""
+    return scib_metrics.isolated_labels(
+        _embedding(adata, embedding_key),
+        _annotation(adata, label_key, "label_key"),
+        _annotation(adata, batch_key, "batch_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.nmi_ari_cluster_labels_kmeans, "embedding_key", "label_key")
+def nmi_ari_cluster_labels_kmeans(adata: AnnData, embedding_key: str = "X_pca", *, label_key: str) -> dict[str, float]:
+    """Agreement of k-means clusters with the biological labels, as NMI and ARI."""
+    return scib_metrics.nmi_ari_cluster_labels_kmeans(
+        _embedding(adata, embedding_key),
+        _annotation(adata, label_key, "label_key"),
+    )
+
+
+@_wraps_scib(scib_metrics.nmi_ari_cluster_labels_leiden, "embedding_key", "label_key", "n_neighbors")
+def nmi_ari_cluster_labels_leiden(
+    adata: AnnData, embedding_key: str = "X_pca", *, label_key: str, n_neighbors: int = 15, **kwargs
+) -> dict[str, float]:
+    """Agreement of leiden clusters with the biological labels, as NMI and ARI."""
+    return scib_metrics.nmi_ari_cluster_labels_leiden(
+        _neighbors(_embedding(adata, embedding_key), n_neighbors),
+        _annotation(adata, label_key, "label_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.graph_connectivity, "embedding_key", "label_key", "n_neighbors")
+def graph_connectivity(adata: AnnData, embedding_key: str = "X_pca", *, label_key: str, n_neighbors: int = 15) -> float:
+    """Fraction of each label that stays in one connected component of the graph, higher is better."""
+    return scib_metrics.graph_connectivity(
+        _neighbors(_embedding(adata, embedding_key), n_neighbors),
+        _annotation(adata, label_key, "label_key"),
+    )
+
+
+@_wraps_scib(scib_metrics.clisi_knn, "embedding_key", "label_key", "n_neighbors")
+def clisi_knn(
+    adata: AnnData, embedding_key: str = "X_pca", *, label_key: str, n_neighbors: int = 90, **kwargs
+) -> float:
+    """Cell-type local inverse Simpson index, higher means labels stay separated."""
+    return scib_metrics.clisi_knn(
+        _neighbors(_embedding(adata, embedding_key), n_neighbors),
+        _annotation(adata, label_key, "label_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.ilisi_knn, "embedding_key", "batch_key", "n_neighbors")
+def ilisi_knn(
+    adata: AnnData, embedding_key: str = "X_pca", *, batch_key: str, n_neighbors: int = 90, **kwargs
+) -> float:
+    """Integration local inverse Simpson index, higher means batches are better mixed."""
+    return scib_metrics.ilisi_knn(
+        _neighbors(_embedding(adata, embedding_key), n_neighbors),
+        _annotation(adata, batch_key, "batch_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.lisi_knn, "embedding_key", "label_key", "n_neighbors")
+def lisi_knn(
+    adata: AnnData, embedding_key: str = "X_pca", *, label_key: str, n_neighbors: int = 90, **kwargs
+) -> np.ndarray:
+    """Local inverse Simpson index per observation, unscaled and not summarised."""
+    return scib_metrics.lisi_knn(
+        _neighbors(_embedding(adata, embedding_key), n_neighbors),
+        _annotation(adata, label_key, "label_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.kbet, "embedding_key", "batch_key", "n_neighbors")
+def kbet(
+    adata: AnnData, embedding_key: str = "X_pca", *, batch_key: str, n_neighbors: int = 50, **kwargs
+) -> tuple[float, np.ndarray, np.ndarray]:
+    """kBET acceptance rate, plus the per-observation statistics; a higher rate means better mixing.
+
+    Take the first element as the score. The quoted documentation below is inaccurate on two
+    points, as of `scib_metrics` 0.6.0: the function is annotated as returning a single `float`
+    but returns a tuple, whose second and third elements are the chi-square statistic and the
+    p-value per observation rather than their means.
+    """
+    return scib_metrics.kbet(
+        _neighbors(_embedding(adata, embedding_key), n_neighbors),
+        _annotation(adata, batch_key, "batch_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.kbet_per_label, "embedding_key", "label_key", "batch_key", "n_neighbors")
+def kbet_per_label(
+    adata: AnnData, embedding_key: str = "X_pca", *, label_key: str, batch_key: str, n_neighbors: int = 50, **kwargs
+) -> float | tuple[float, pd.DataFrame]:
+    """kBET acceptance rate computed within each label and then averaged."""
+    return scib_metrics.kbet_per_label(
+        _neighbors(_embedding(adata, embedding_key), n_neighbors),
+        _annotation(adata, batch_key, "batch_key"),
+        _annotation(adata, label_key, "label_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.sbee, "embedding_key", "label_key", "batch_key", "n_neighbors")
+def sbee(
+    adata: AnnData, embedding_key: str = "X_pca", *, label_key: str, batch_key: str, n_neighbors: int = 90, **kwargs
+) -> float:
+    """Single-cell batch effect evaluator, combining a distance and a neighbourhood component."""
+    embedding = _embedding(adata, embedding_key)
+    return scib_metrics.sbee(
+        _neighbors(embedding, n_neighbors),
+        embedding,
+        _annotation(adata, batch_key, "batch_key"),
+        _annotation(adata, label_key, "label_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.pcr_comparison, "embedding_before", "embedding_after", "covariate_key", "categorical")
+def pcr_comparison(
+    adata: AnnData,
+    embedding_before: str,
+    embedding_after: str,
+    *,
+    covariate_key: str,
+    categorical: bool | None = None,
+    **kwargs,
+) -> float:
+    """Change in the variance a covariate explains, before against after a processing step."""
+    covariate = _annotation(adata, covariate_key, "covariate_key")
+
+    # A non-numeric covariate has to be one-hot encoded rather than regressed on directly, which
+    # `scib_metrics` does itself given `categorical=True`. Detecting it keeps a continuous
+    # covariate, such as the number of proteins per cell, from being turned into arbitrary codes.
+    if categorical is None:
+        categorical = not np.issubdtype(np.asarray(covariate).dtype, np.number)
+
+    return scib_metrics.pcr_comparison(
+        _embedding(adata, embedding_before),
+        _embedding(adata, embedding_after),
+        covariate,
+        categorical=categorical,
+        **kwargs,
+    )
+
+
+SCIB_METRICS: dict[str, Callable] = {
+    metric.__name__: metric
+    for metric in (
+        bras,
+        clisi_knn,
+        graph_connectivity,
+        ilisi_knn,
+        isolated_labels,
+        kbet,
+        kbet_per_label,
+        lisi_knn,
+        nmi_ari_cluster_labels_kmeans,
+        nmi_ari_cluster_labels_leiden,
+        pcr_comparison,
+        sbee,
+        silhouette_batch,
+        silhouette_label,
+    )
+}
+"""Every wrapped `scib_metrics` metric by name.
+
+Each wrapper exposes `required_keys`, the `adata` annotations it needs, and `wrapped_metric`, the
+`scib_metrics` function it calls. `pcr_comparison` is the only one that scores two embeddings and
+therefore takes different positional arguments than the rest.
+
+Examples
+--------
+Run every metric that a given pair of annotations supports:
+
+.. code-block:: python
+
+    keys = {"label_key": "cell_type", "batch_key": "plate"}
+    scores = {
+        name: metric(adata, "X_pca", **{key: keys[key] for key in metric.required_keys})
+        for name, metric in msm.SCIB_METRICS.items()
+        if name != "pcr_comparison" and set(metric.required_keys) <= keys.keys()
+    }
+"""
