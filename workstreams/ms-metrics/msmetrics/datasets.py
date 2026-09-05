@@ -6,7 +6,7 @@ from pathlib import Path
 import gdown
 import platformdirs
 
-DATASETS_DIR = Path(os.environ.get("MSMETRICS_DATA_DIR") or platformdirs.user_cache_dir("msmetrics", "your_company"))
+DATASETS_DIR = Path(os.environ.get("MSMETRICS_DATA_DIR") or platformdirs.user_cache_dir("msmetrics"))
 
 WU2025_URL = "https://drive.google.com/uc?export=download&id=11iEGmao3XdJo6But65cxu7suy_yLul7N"
 
