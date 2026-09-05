@@ -7,7 +7,7 @@ distributions, clustering) with a **method** that changes the data. Broadly, met
 change the shape of the dataset (filtering: masking features or samples) or the distribution
 of its values (normalization / batch correction: moving and rescaling samples or features).
 
-See `analysis.ipynb` for running and testing the individual modules on example datasets.
+See `analysis.py` for running and testing the individual modules on example datasets.
 
 ## Installation
 
