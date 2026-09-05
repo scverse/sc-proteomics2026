@@ -1,14 +1,44 @@
 """Metrics for diagnosing the effect of imputation on single-cell proteomics data."""
 
 import warnings
+from collections.abc import Callable
 
 import alphapepttools as apt
 import matplotlib.pyplot as plt
+from scipy.stats import median_abs_deviation
 import numpy as np
+import pandas as pd
+import scanpy as sc
+import scib_metrics
 from anndata import AnnData
 from scipy.sparse import csr_matrix
+from scipy.stats import spearmanr
+from sklearn.metrics import pairwise_distances
 from sklearn.neighbors import NearestNeighbors
 
+from msmetrics.scib_wrapper import _annotation, _embedding, _neighbors, _wraps_scib
+
+
+def mad_outlier(values, n_mad=3.0, direction="both"):
+    """Boolean mask of values further than ``n_mad`` MADs from the median.
+
+    References
+    ----------
+    Heumos, L. et al. (2023). Best practices for single-cell analysis across
+    modalities. Nat Rev Genet 24, 550-572. https://doi.org/10.1038/s41576-023-00586-w
+    """
+    values = np.asarray(values, dtype=float)
+    median = np.nanmedian(values)
+    mad = median_abs_deviation(values, nan_policy="omit")
+    if mad == 0:
+        return ~np.isfinite(values)
+
+    deviation = {
+        "both": np.abs(values - median),
+        "up": values - median,
+        "down": median - values,
+    }[direction]
+    return (~np.isfinite(values)) | (deviation > n_mad * mad)
 
 def draw_missingness(
     X: np.ndarray,
@@ -78,6 +108,36 @@ def draw_missingness(
     else:
         plt.show()
 
+def draw_ranked_median_intensities(
+    X: np.ndarray,
+    *,
+    xlabel: str | None = None,
+    ylabel: str | None = None,
+    title: str | None = None,
+    figsize: tuple[float, float] = (5, 2),
+    return_figure: bool = False,
+) -> plt.Figure:
+    """Generate a ranked plot of median intensities per sample."""
+
+    X = np.asarray(X)
+    medians = np.nanmedian(X, axis=0)
+
+    medians = np.sort(medians)[::-1]
+
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.plot(medians, marker="o")
+    ax.set_ylim(bottom=0)
+    if xlabel:
+        ax.set_xlabel(xlabel)
+    if ylabel:
+        ax.set_ylabel(ylabel)
+    if title:
+        ax.set_title(title)
+
+    if return_figure:
+        return fig
+    else:
+        plt.show()
 
 def variance_preservation(
     observed: np.ndarray,
@@ -203,6 +263,119 @@ def variance_preservation(
     }
 
 
+def perform_leiden_clustering(
+    adata: AnnData,
+    *,
+    resolution: float = 1.0,
+    n_neighbors: int = 15,
+    random_state: int = 0,
+):
+    """Cluster observations in AnnData using Leiden clustering.
+
+    Parameters
+    ----------
+    adata
+        Input with shape (n_cells, n_features).
+    resolution
+        Leiden resolution parameter. Higher values generally produce more
+        clusters.
+    n_neighbors
+        Number of neighbors used to construct the neighborhood graph.
+    random_state
+        Random seed for reproducibility.
+    """
+    if adata.shape[0] < 2:
+        raise ValueError("At least two observations are required.")
+
+    sc.pp.neighbors(
+        adata,
+        n_neighbors=min(n_neighbors, adata.shape[0] - 1),
+        use_rep="X",
+    )
+
+    sc.tl.leiden(
+        adata,
+        resolution=resolution,
+        random_state=random_state,
+        key_added="_leiden",
+        # python-igraph's own implementation, which scanpy is moving to as its default. It needs an
+        # undirected graph and a fixed iteration count, and it keeps leidenalg off the dependency list.
+        flavor="igraph",
+        n_iterations=2,
+        directed=False,
+    )
+
+
+def point_cluster_distance(adata: AnnData, before_layer: str, after_layer: str, cluster_key: str = "_leiden") -> float:
+    """Point Cluster Distance (PCD).
+
+    Measures preservation of global cell-cell structure between `before`
+    and `after` using distances from cells to cluster centroids.
+
+    Clusters are determined in `before`. The same cluster assignments are
+    then used to compute centroids in both spaces. Cell-to-centroid distance
+    matrices are flattened and compared using Spearman correlation.
+
+    Parameters
+    ----------
+    before
+        Shape (n_cells, n_features_before). Matrix before a pp step.
+    after
+        Shape (n_cells, n_features_after). Matrix after a pp step.
+    cluster_labels
+        Clusters assignment of the cells in before and after.
+
+    Returns
+    -------
+    float
+        Spearman correlation between the PCD matrices. Higher is better.
+    """
+    # retreive clustering labels from the AnnData object
+    labels = adata.obs[cluster_key].cat.codes.to_numpy()
+    return _point_cluster_distance(
+        adata.layers[before_layer],
+        adata.layers[after_layer],
+        labels,
+    )
+
+
+def _point_cluster_distance(
+    before: csr_matrix,
+    after: csr_matrix,
+    cluster_labels: np.ndarray[int],
+) -> float:
+    """Point Cluster Distance (PCD).
+
+    Compute PCD given the before and after matrices and labels.
+    """
+    if before.shape[0] != after.shape[0]:
+        raise ValueError("`before` and `after` must contain the same number of cells.")
+
+    # Compute centroids in before and after using the cluster labels.
+    n_clusters = np.unique(cluster_labels).shape[0]
+
+    def centroids(x: csr_matrix) -> np.ndarray:
+        return np.vstack(
+            [np.asarray(x[cluster_labels == cluster].mean(axis=0)).ravel() for cluster in range(n_clusters)]
+        )
+
+    before_centroids = centroids(before)
+    after_centroids = centroids(after)
+
+    # Distance from every cell to every centroid.
+    # Shapes: (n_cells, n_clusters)
+    before_distances = pairwise_distances(before, before_centroids, metric="euclidean")
+    after_distances = pairwise_distances(after, after_centroids, metric="euclidean")
+
+    # Compare the flattened PCD matrices using Spearman correlation.
+    correlation = spearmanr(
+        before_distances.ravel(),
+        after_distances.ravel(),
+    ).statistic
+
+    return float(correlation)
+
+
 def _knn_adjacency(embedding: np.ndarray, n_neighbors: int) -> csr_matrix:
     """Binary observations x observations adjacency of the `n_neighbors` nearest neighbours, excluding self."""
     # Querying without arguments makes scikit-learn exclude every observation from its own
@@ -290,7 +463,7 @@ def neighborhood_preservation(
 
     Notes
     -----
-    The chance of random overlaps increases with neihborhood size and dataset size. 
+    The chance of random overlaps increases with neihborhood size and dataset size.
     Thus, this metric is not comparable between different datasets with different numbers of samples.
     """
     before = np.asarray(before)
@@ -370,4 +543,189 @@ def compute_neighborhood_preservation(
         adata.obsm[embedding_before],
         adata.obsm[embedding_after],
         n_neighbors=n_neighbors,
+    )
+
+
+@_wraps_scib(scib_metrics.silhouette_label, "embedding_key", "label_key")
+def silhouette_label(adata: AnnData, embedding_key: str = "X_pca", *, label_key: str, **kwargs) -> float:
+    """Average silhouette width of the biological labels, higher is better."""
+    return scib_metrics.silhouette_label(
+        _embedding(adata, embedding_key),
+        _annotation(adata, label_key, "label_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.silhouette_batch, "embedding_key", "label_key", "batch_key")
+def silhouette_batch(
+    adata: AnnData, embedding_key: str = "X_pca", *, label_key: str, batch_key: str, **kwargs
+) -> float:
+    """Average silhouette width of the batches within each label, higher means better mixed."""
+    return scib_metrics.silhouette_batch(
+        _embedding(adata, embedding_key),
+        _annotation(adata, label_key, "label_key"),
+        _annotation(adata, batch_key, "batch_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.bras, "embedding_key", "label_key", "batch_key")
+def bras(adata: AnnData, embedding_key: str = "X_pca", *, label_key: str, batch_key: str, **kwargs) -> float:
+    """Batch removal adapted silhouette, combining label separation and batch mixing."""
+    return scib_metrics.bras(
+        _embedding(adata, embedding_key),
+        _annotation(adata, label_key, "label_key"),
+        _annotation(adata, batch_key, "batch_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.isolated_labels, "embedding_key", "label_key", "batch_key")
+def isolated_labels(adata: AnnData, embedding_key: str = "X_pca", *, label_key: str, batch_key: str, **kwargs) -> float:
+    """Silhouette of the labels that appear in the fewest batches, higher is better."""
+    return scib_metrics.isolated_labels(
+        _embedding(adata, embedding_key),
+        _annotation(adata, label_key, "label_key"),
+        _annotation(adata, batch_key, "batch_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.nmi_ari_cluster_labels_kmeans, "embedding_key", "label_key")
+def nmi_ari_cluster_labels_kmeans(adata: AnnData, embedding_key: str = "X_pca", *, label_key: str) -> dict[str, float]:
+    """Agreement of k-means clusters with the biological labels, as NMI and ARI."""
+    return scib_metrics.nmi_ari_cluster_labels_kmeans(
+        _embedding(adata, embedding_key),
+        _annotation(adata, label_key, "label_key"),
+    )
+
+
+@_wraps_scib(scib_metrics.nmi_ari_cluster_labels_leiden, "embedding_key", "label_key", "n_neighbors")
+def nmi_ari_cluster_labels_leiden(
+    adata: AnnData, embedding_key: str = "X_pca", *, label_key: str, n_neighbors: int = 15, **kwargs
+) -> dict[str, float]:
+    """Agreement of leiden clusters with the biological labels, as NMI and ARI."""
+    return scib_metrics.nmi_ari_cluster_labels_leiden(
+        _neighbors(_embedding(adata, embedding_key), n_neighbors),
+        _annotation(adata, label_key, "label_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.graph_connectivity, "embedding_key", "label_key", "n_neighbors")
+def graph_connectivity(adata: AnnData, embedding_key: str = "X_pca", *, label_key: str, n_neighbors: int = 15) -> float:
+    """Fraction of each label that stays in one connected component of the graph, higher is better."""
+    return scib_metrics.graph_connectivity(
+        _neighbors(_embedding(adata, embedding_key), n_neighbors),
+        _annotation(adata, label_key, "label_key"),
+    )
+
+
+@_wraps_scib(scib_metrics.clisi_knn, "embedding_key", "label_key", "n_neighbors")
+def clisi_knn(
+    adata: AnnData, embedding_key: str = "X_pca", *, label_key: str, n_neighbors: int = 90, **kwargs
+) -> float:
+    """Cell-type local inverse Simpson index, higher means labels stay separated."""
+    return scib_metrics.clisi_knn(
+        _neighbors(_embedding(adata, embedding_key), n_neighbors),
+        _annotation(adata, label_key, "label_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.ilisi_knn, "embedding_key", "batch_key", "n_neighbors")
+def ilisi_knn(
+    adata: AnnData, embedding_key: str = "X_pca", *, batch_key: str, n_neighbors: int = 90, **kwargs
+) -> float:
+    """Integration local inverse Simpson index, higher means batches are better mixed."""
+    return scib_metrics.ilisi_knn(
+        _neighbors(_embedding(adata, embedding_key), n_neighbors),
+        _annotation(adata, batch_key, "batch_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.lisi_knn, "embedding_key", "label_key", "n_neighbors")
+def lisi_knn(
+    adata: AnnData, embedding_key: str = "X_pca", *, label_key: str, n_neighbors: int = 90, **kwargs
+) -> np.ndarray:
+    """Local inverse Simpson index per observation, unscaled and not summarised."""
+    return scib_metrics.lisi_knn(
+        _neighbors(_embedding(adata, embedding_key), n_neighbors),
+        _annotation(adata, label_key, "label_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.kbet, "embedding_key", "batch_key", "n_neighbors")
+def kbet(
+    adata: AnnData, embedding_key: str = "X_pca", *, batch_key: str, n_neighbors: int = 50, **kwargs
+) -> tuple[float, np.ndarray, np.ndarray]:
+    """kBET acceptance rate, plus the per-observation statistics; a higher rate means better mixing.
+
+    Take the first element as the score. The quoted documentation below is inaccurate on two
+    points, as of `scib_metrics` 0.6.0: the function is annotated as returning a single `float`
+    but returns a tuple, whose second and third elements are the chi-square statistic and the
+    p-value per observation rather than their means.
+    """
+    return scib_metrics.kbet(
+        _neighbors(_embedding(adata, embedding_key), n_neighbors),
+        _annotation(adata, batch_key, "batch_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.kbet_per_label, "embedding_key", "label_key", "batch_key", "n_neighbors")
+def kbet_per_label(
+    adata: AnnData, embedding_key: str = "X_pca", *, label_key: str, batch_key: str, n_neighbors: int = 50, **kwargs
+) -> float | tuple[float, pd.DataFrame]:
+    """kBET acceptance rate computed within each label and then averaged."""
+    return scib_metrics.kbet_per_label(
+        _neighbors(_embedding(adata, embedding_key), n_neighbors),
+        _annotation(adata, batch_key, "batch_key"),
+        _annotation(adata, label_key, "label_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.sbee, "embedding_key", "label_key", "batch_key", "n_neighbors")
+def sbee(
+    adata: AnnData, embedding_key: str = "X_pca", *, label_key: str, batch_key: str, n_neighbors: int = 90, **kwargs
+) -> float:
+    """Single-cell batch effect evaluator, combining a distance and a neighbourhood component."""
+    embedding = _embedding(adata, embedding_key)
+    return scib_metrics.sbee(
+        _neighbors(embedding, n_neighbors),
+        embedding,
+        _annotation(adata, batch_key, "batch_key"),
+        _annotation(adata, label_key, "label_key"),
+        **kwargs,
+    )
+
+
+@_wraps_scib(scib_metrics.pcr_comparison, "embedding_before", "embedding_after", "covariate_key", "categorical")
+def pcr_comparison(
+    adata: AnnData,
+    embedding_before: str,
+    embedding_after: str,
+    *,
+    covariate_key: str,
+    categorical: bool | None = None,
+    **kwargs,
+) -> float:
+    """Change in the variance a covariate explains, before against after a processing step."""
+    covariate = _annotation(adata, covariate_key, "covariate_key")
+
+    # A non-numeric covariate has to be one-hot encoded rather than regressed on directly, which
+    # `scib_metrics` does itself given `categorical=True`. Detecting it keeps a continuous
+    # covariate, such as the number of proteins per cell, from being turned into arbitrary codes.
+    if categorical is None:
+        categorical = not np.issubdtype(np.asarray(covariate).dtype, np.number)
+
+    return scib_metrics.pcr_comparison(
+        _embedding(adata, embedding_before),
+        _embedding(adata, embedding_after),
+        covariate,
+        categorical=categorical,
+        **kwargs,
     )
