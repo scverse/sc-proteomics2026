@@ -3,6 +3,9 @@
 import warnings
 
 import numpy as np
+from anndata import AnnData
+from scipy.sparse import csr_matrix
+from sklearn.neighbors import NearestNeighbors
 
 
 def variance_preservation(
@@ -127,3 +130,173 @@ def variance_preservation(
         "per_feature": ratio,
         "median_ratio": float(np.median(ratio[summarised])) if summarised.any() else float("nan"),
     }
+
+
+def _knn_adjacency(embedding: np.ndarray, n_neighbors: int) -> csr_matrix:
+    """Binary observations x observations adjacency of the `n_neighbors` nearest neighbours, excluding self."""
+    # Querying without arguments makes scikit-learn exclude every observation from its own
+    # neighbourhood, which stays correct when duplicate observations make the self-match ambiguous.
+    indices = NearestNeighbors(n_neighbors=n_neighbors).fit(embedding).kneighbors(return_distance=False)
+
+    n_obs = indices.shape[0]
+    indptr = np.arange(n_obs + 1) * n_neighbors
+    return csr_matrix(
+        (np.ones(indices.size, dtype=bool), indices.ravel(), indptr),
+        shape=(n_obs, n_obs),
+    )
+
+
+def neighborhood_preservation(
+    before: np.ndarray,
+    after: np.ndarray,
+    *,
+    n_neighbors: int = 20,
+) -> dict[str, np.ndarray | float]:
+    """Neighborhood preservation between two embeddings of the same observations.
+
+    Quantify how strongly a processing step rearranged the local structure of the data, by
+    comparing the k nearest neighbours of every observation before and after the step:
+
+        overlap_i = |N_before(i) intersect N_after(i)| / k
+
+    where `N(i)` is the set of the k nearest neighbours of observation `i`, excluding itself.
+
+    Because two unrelated embeddings still share neighbours by chance, the summary is corrected
+    against that floor, in the spirit of an adjusted Rand index:
+
+        adjusted_overlap = (mean_overlap - chance_overlap) / (1 - chance_overlap)
+
+    with `chance_overlap = k / (n_obs - 1)`, the expected overlap of two random neighbourhoods.
+    An adjusted overlap of 1 means the step left every neighbourhood untouched, 0 means the
+    resulting embedding is no more similar to the original one than a random one would be.
+
+    Parameters
+    ----------
+    before
+        Observations x dimensions embedding before the processing step, e.g. `adata.obsm["X_pca"]`.
+    after
+        Observations x dimensions embedding after the processing step, over the same observations
+        in the same order.
+    n_neighbors
+        Number of nearest neighbours per observation, excluding the observation itself.
+
+    Returns
+    -------
+    dict
+        `per_observation`
+            Raw overlap fraction per observation, between 0 and 1.
+        `mean_overlap`
+            Mean raw overlap across observations.
+        `chance_overlap`
+            Overlap expected from two unrelated embeddings, `n_neighbors / (n_obs - 1)`.
+        `adjusted_overlap`
+            Mean overlap rescaled so that 1 is perfect preservation and 0 is chance level.
+            `nan` where the correction is undefined, i.e. when every observation neighbours
+            every other one.
+
+    Examples
+    --------
+    Check how far imputation moved the cells relative to each other:
+
+    .. code-block:: python
+
+        import alphapepttools as apt
+        import msmetrics as msm
+
+        apt.pp.bpca(adata)
+        adata_imputed = apt.pp.impute_gaussian(adata, copy=True)
+        apt.pp.bpca(adata_imputed)
+
+        result = msm.neighborhood_preservation(adata.obsm["X_pca"], adata_imputed.obsm["X_pca"])
+        print(result["adjusted_overlap"])
+
+    Locate the cells whose neighbourhood was rearranged the most:
+
+    .. code-block:: python
+
+        adata.obs["neighborhood_overlap"] = result["per_observation"]
+        sc.pl.embedding(adata, basis="X_umap", color="neighborhood_overlap")
+
+    Notes
+    -----
+    The chance of random overlaps increases with neihborhood size and dataset size. 
+    Thus, this metric is not comparable between different datasets with different numbers of samples.
+    """
+    before = np.asarray(before)
+    after = np.asarray(after)
+
+    n_obs = before.shape[0]
+
+    # Binary nearest neighbors graphs
+    before_knn_graph = _knn_adjacency(before, n_neighbors)
+    after_knn_graph = _knn_adjacency(after, n_neighbors)
+
+    # If shared: 1x1=1
+    # If not shared: 1x0 = 0/0x1 = 0
+    shared = before_knn_graph.multiply(after_knn_graph)
+
+    # Row-wise/observation-wise summation
+    per_observation = np.asarray(shared.sum(axis=1)).ravel() / n_neighbors
+
+    mean_overlap = float(per_observation.mean())
+
+    chance_overlap = n_neighbors / (n_obs - 1)
+
+    # Adjust by chance
+    # Maximum dynamic range is (random subsample to 1)
+    chance_overlap = (mean_overlap - chance_overlap) / (1 - chance_overlap)
+
+    return {
+        "per_observation": per_observation,
+        "mean_overlap": mean_overlap,
+        "chance_overlap": chance_overlap,
+        "adjusted_overlap": chance_overlap,
+    }
+
+
+def compute_neighborhood_preservation(
+    adata: AnnData,
+    embedding_before: str,
+    embedding_after: str,
+    *,
+    n_neighbors: int = 20,
+) -> dict[str, np.ndarray | float]:
+    """Neighborhood preservation between two embeddings stored in the same :class:`anndata.AnnData`.
+
+    Parameters
+    ----------
+    adata
+        Annotated data matrix holding both embeddings in `.obsm`.
+    embedding_before
+        Key in `adata.obsm` of the embedding before the processing step.
+    embedding_after
+        Key in `adata.obsm` of the embedding after the processing step.
+    n_neighbors
+        Number of nearest neighbours per observation, excluding the observation itself.
+
+    Returns
+    -------
+    dict
+        As returned by :func:`neighborhood_preservation`.
+
+    Raises
+    ------
+    KeyError
+        If either key is missing from `adata.obsm`.
+
+    Examples
+    --------
+    .. code-block:: python
+
+        result = msm.compute_neighborhood_preservation(adata, "X_pca_raw", "X_pca_imputed")
+        print(result["adjusted_overlap"])
+    """
+    for key in (embedding_before, embedding_after):
+        if key not in adata.obsm:
+            raise KeyError(f"`{key}` is not in `adata.obsm`, available keys are {list(adata.obsm)}.")
+
+    return neighborhood_preservation(
+        adata.obsm[embedding_before],
+        adata.obsm[embedding_after],
+        n_neighbors=n_neighbors,
+    )

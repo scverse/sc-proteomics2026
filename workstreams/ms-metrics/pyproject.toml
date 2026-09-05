@@ -28,6 +28,8 @@ dependencies = [
   "numpy",
   "pandas",
   "platformdirs>=4.11.7",
+  "scikit-learn",
+  "scipy",
 ]
 optional-dependencies.dev = [
   "pre-commit",
