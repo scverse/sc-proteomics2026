@@ -40,15 +40,18 @@ jobs:
       MSMETRICS_DOSES: "0,0.5,1.0"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
+          # Without this the cache has nothing to key on and is never invalidated, so a dependency
+          # change would keep resolving against the stale one.
+          cache-dependency-glob: workstreams/ms-metrics/pyproject.toml
 
       # Keyed on datasets.py because the download URL lives there, so changing it busts the cache.
       # A file that is not HDF5 is rejected and deleted by datasets.wu2025 rather than cached, so a
@@ -67,7 +70,7 @@ jobs:
           jupytext --to ipynb --output analysis.ipynb analysis.py
           jupyter nbconvert --execute --to html --output analysis.html analysis.ipynb
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: analysis-notebook
           path: |
