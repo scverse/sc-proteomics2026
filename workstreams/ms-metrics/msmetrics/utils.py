@@ -194,25 +194,18 @@ def neighborhood_preservation(
             `nan` where the correction is undefined, i.e. when every observation neighbours
             every other one.
 
-    Raises
-    ------
-    ValueError
-        If the embeddings are not two-dimensional, differ in their number of observations,
-        contain non-finite values, or if `n_neighbors` does not fit the number of observations.
-
     Examples
     --------
     Check how far imputation moved the cells relative to each other:
 
     .. code-block:: python
 
-        import scanpy as sc
         import alphapepttools as apt
         import msmetrics as msm
 
-        sc.pp.pca(adata)
+        apt.pp.bpca(adata)
         adata_imputed = apt.pp.impute_gaussian(adata, copy=True)
-        sc.pp.pca(adata_imputed)
+        apt.pp.bpca(adata_imputed)
 
         result = msm.neighborhood_preservation(adata.obsm["X_pca"], adata_imputed.obsm["X_pca"])
         print(result["adjusted_overlap"])
@@ -226,21 +219,8 @@ def neighborhood_preservation(
 
     Notes
     -----
-    Neighbours are determined exactly rather than approximately, so that repeated runs on the same
-    embedding return the same value. Rankings of processing steps are therefore reproducible, at the
-    cost of scaling quadratically with the number of observations.
-
-    `chance_overlap` shifts by an order of magnitude between a few hundred and a few thousand
-    observations, which is why the raw `mean_overlap` of two datasets of different size cannot be
-    compared directly. The correction pins the null to 0 for any `n_obs` and `n_neighbors`, but it
-    does not remove the dependence of the intermediate regime on `n_neighbors / n_obs`: with
-    `n_neighbors` held fixed, a larger dataset means a proportionally tighter neighbourhood and
-    hence a stricter test. For strict comparability across datasets of different size, scale
-    `n_neighbors` with `n_obs`.
-
-    Ties in the distances are broken arbitrarily but deterministically. Duplicate observations,
-    which are common after imputing a feature that is missing in many cells, therefore inflate the
-    apparent rearrangement, since their mutual ordering carries no information.
+    The chance of random overlaps increases with neihborhood size and dataset size. 
+    Thus, this metric is not comparable between different datasets with different numbers of samples.
     """
     before = np.asarray(before)
     after = np.asarray(after)
@@ -281,10 +261,7 @@ def compute_neighborhood_preservation(
     *,
     n_neighbors: int = 20,
 ) -> dict[str, np.ndarray | float]:
-    """Neighborhood preservation between two embeddings stored in the same `AnnData`.
-
-    Convenience wrapper around :func:`neighborhood_preservation` that reads both embeddings from
-    `adata.obsm`. Unlike `scanpy.pp.neighbors`, it leaves `adata` untouched.
+    """Neighborhood preservation between two embeddings stored in the same :class:`anndata.AnnData`.
 
     Parameters
     ----------
