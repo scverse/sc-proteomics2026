@@ -50,108 +50,177 @@ adata
 # ## Meta-benchmarking: do the metrics themselves behave?
 #
 # A metric that returns a number for every dataset is not thereby useful. `msmetrics.meta` perturbs
-# the data at increasing dose, recomputes each metric, and reads the resulting curve four ways:
-# does the metric collapse when the signal is destroyed (`null_control`), how much damage does it
-# take to notice (`sensitivity`), is the response monotone and wide enough to read
+# the data by a known amount, recomputes each metric, and reads the resulting dose-response curve
+# four ways: does the metric collapse when the signal is destroyed (`null_control`), how much damage
+# does it take to notice (`sensitivity`), is the response monotone and wide enough to read
 # (`response_shape`), and does it move with biology or with a technical confound (`specificity`).
+#
+# Below we run every metric the package ships against every perturbation, on wu2025.
+
+# %% [markdown]
+# ### Working set
+#
+# Two thirds of the proteins are observed in under 5 % of cells, and 1094 of the 2599 cells carry no
+# `celltype` or `sample` label at all. Both have to go before any of this means anything.
 
 # %%
-from msmetrics import meta, variance_preservation
+import warnings
+
+from sklearn.utils.extmath import randomized_svd
+
+from msmetrics import compute_neighborhood_preservation, meta, variance_preservation
 from msmetrics import perturbations as pert
 from msmetrics import plotting as pl
 
+MIN_COMPLETENESS = 0.2
+N_COMPONENTS = 15
 
-def prepare(adata, rng):
-    """One embedding, shared by every metric.
+labelled = adata[adata.obs["celltype"].notna() & adata.obs["sample"].notna()].copy()
+complete = np.isfinite(np.asarray(labelled.X, float)).mean(axis=0) >= MIN_COMPLETENESS
+working = labelled[:, complete].copy()
+working.obs["celltype"] = working.obs["celltype"].cat.remove_unused_categories()
+working.obs["sample"] = working.obs["sample"].cat.remove_unused_categories()
 
-    Every metric in a sweep must see the same preprocessing, or a difference in their measured
-    sensitivity is partly a difference in their PCA rather than in the metrics.
-    """
-    X = np.asarray(adata.X, dtype=float)
-    column_mean = np.nanmean(np.where(np.isfinite(X), X, np.nan), axis=0)
-    X = np.where(np.isfinite(X), X, np.nan_to_num(column_mean)[None, :])
-    X = X - X.mean(axis=0)
-    adata.obsm["X_pca"] = X @ np.linalg.svd(X, full_matrices=False)[2][:10].T
-    return adata
+print(working.shape, f"{np.mean(~np.isfinite(np.asarray(working.X, float))):.1%} missing")
+pd.crosstab(working.obs["celltype"], working.obs["sample"])
 
 
-def group_separation(adata, key):
-    """Toy stand-in for a real batch/bio metric: between-group variance fraction on the embedding."""
-    embedding, groups = adata.obsm["X_pca"], adata.obs[key].to_numpy()
-    grand = embedding.mean(axis=0)
-    between = sum(
-        (groups == level).sum() * np.square(embedding[groups == level].mean(axis=0) - grand)
-        for level in pd.unique(groups)
-    )
-    total = np.square(embedding - grand).sum(axis=0)
-    usable = total > 0
-    return float(np.mean(between[usable] / total[usable]))
+# %% [markdown]
+# ### One embedding, shared by every metric
+#
+# If each metric computed its own PCA, a difference in their measured sensitivity would partly be a
+# difference in their preprocessing. `prepare` runs once per replicate and hands every metric the
+# same imputed matrix and the same embedding.
+#
+# It also carries two things the paired metrics need: the matrix as it stood before imputation, and
+# the embedding of the *untouched* dataset, indexed by cell name so it survives the per-replicate
+# subsampling. `neighborhood_preservation` then asks the same question at every dose — how far did
+# this perturbation move the local structure away from the original data?
+
+
+# %%
+def embed(X, n_components=N_COMPONENTS, seed=0):
+    """Mean-impute the missing values, then take the leading left singular vectors."""
+    with warnings.catch_warnings():
+        # A protein can end up fully masked at a high missingness dose, which has no mean. Those
+        # columns fall back to zero below, so the warning carries nothing.
+        warnings.filterwarnings("ignore", category=RuntimeWarning, message="Mean of empty slice")
+        column = np.nanmean(np.where(np.isfinite(X), X, np.nan), axis=0)
+    Y = np.where(np.isfinite(X), X, np.nan_to_num(column)[None, :])
+    Y = Y - Y.mean(axis=0)
+    U, S, _ = randomized_svd(Y, n_components=n_components, random_state=seed)
+    return Y, U * S
+
+
+reference_embedding = pd.DataFrame(embed(np.asarray(working.X, float))[1], index=working.obs_names)
+
+
+def prepare(a, rng):
+    observed = np.asarray(a.X, float)
+    imputed, embedding = embed(observed)
+    a.layers["pre_imputation"] = observed
+    a.X = imputed
+    a.obsm["X_pca"] = embedding
+    a.obsm["X_pca_reference"] = reference_embedding.loc[a.obs_names].to_numpy()
+    return a
 
 
 metrics = {
-    "bio": lambda a: group_separation(a, "cell_type"),
-    "batch": lambda a: group_separation(a, "batch"),
+    "neighborhood_preservation": lambda a: compute_neighborhood_preservation(a, "X_pca_reference", "X_pca")[
+        "adjusted_overlap"
+    ],
+    "variance_preservation": lambda a: variance_preservation(a.layers["pre_imputation"], a.X)["median_ratio"],
 }
 
 perturbations = {
-    "dilute": pert.DiluteSignal("cell_type"),  # biology
-    "loading": pert.InjectLoadingOffset(),  # cell size
-    "batch_shift": pert.InjectBatchShift("batch"),  # batch
-    "missing": pert.InjectMissing(mechanism="mnar"),  # imputation strength, with the imputer above
+    "dilute_celltype": pert.DiluteSignal("celltype"),  # biology
+    "loading_offset": pert.InjectLoadingOffset(),  # cell size
+    "batch_shift": pert.InjectBatchShift("sample"),  # batch
+    "missing_mnar": pert.InjectMissing(mechanism="mnar"),  # missingness, hence imputation strength
+    # `sample` is confounded with `celltype` here -- GW13 is mostly IN-CGE and oRG -- so a global
+    # permutation would destroy the batch x celltype table too. Permute within sample instead.
+    "permute_celltype": pert.PermuteLabels("celltype", stratify_by="sample"),
 }
 
-curve = meta.sweep(adata, metrics, perturbations, n_replicates=20, prepare=prepare, seed=0)
+# %%
+curve = meta.sweep(
+    working,
+    metrics,
+    perturbations,
+    doses=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+    n_replicates=30,
+    prepare=prepare,
+    seed=0,
+)
 curve.head()
+
+# %%
+meta.reference_noise(curve)
+
+# %% [markdown]
+# ### Is the response monotone, and how much of it is usable?
+#
+# Read `range_over_noise`, not `dynamic_range`: raw ranges are not comparable across metrics on
+# different scales, whereas dividing each metric's response by its own noise puts them in the same
+# units of detectability. `max_usable_dose` shows where a sweep ran out of computable doses --
+# masking every observed value leaves `variance_preservation` nothing to score, so its curve stops
+# at 0.8.
 
 # %%
 meta.response_shape(curve)
 
 # %%
-# Read `contrast`: positive means the metric tracks biology more strongly than the confound. Read
-# both slopes too, since a contrast near zero is produced both by a metric that responds to
-# everything and by one that responds to nothing.
-meta.specificity(curve, signal="dilute", nuisance="loading")
+meta.sensitivity(curve).groupby(["perturbation", "metric"])["detection_dose"].first().unstack()
 
 # %%
-pl.response(curve, metrics=["bio", "batch"])
-pl.scorecard(curve)
-pl.specificity(curve, signal="dilute", nuisance="loading")
+pl.response(curve)
 
 # %% [markdown]
-# The null control gets its own sweep. Its p-value cannot fall below `1 / (n_replicates + 1)`, so
-# the 20 replicates above could never reach significance no matter how clearly a metric responds.
+# ### Does the metric track biology, or the confound?
+#
+# `contrast` above 0 means the metric responds more strongly to diluted biology than to the
+# nuisance. Read both slopes as well: a contrast near zero is produced both by a metric that
+# responds to everything and by one that responds to nothing.
+#
+# `neighborhood_preservation` comes out **negative against the loading offset** -- it responds
+# harder to cell size than to cell type, so a drop in it does not by itself mean biology was lost.
+# Note that `prepare` here does no per-cell normalisation; median-normalising would cancel a scalar
+# loading offset outright, and re-running this with normalisation in `prepare` is the obvious next
+# experiment.
+
+# %%
+pd.concat(
+    meta.specificity(curve, signal="dilute_celltype", nuisance=nuisance)
+    for nuisance in ("loading_offset", "batch_shift", "missing_mnar")
+)
+
+# %%
+pl.specificity(curve, signal="dilute_celltype", nuisance="loading_offset")
+
+# %%
+pl.scorecard(curve, statistic="range_over_noise")
+
+# %% [markdown]
+# ### Null control
+#
+# The null control gets its own sweep: its p-value cannot fall below `1 / (n_replicates + 1)`, so
+# the 30 replicates above could never reach significance no matter how clearly a metric responded.
+#
+# Both metrics come out at exactly p = 1, z = 0 -- neither of them reads `.obs` at all, so shuffling
+# the labels cannot move them. That is the finding, not a failure: msmetrics currently ships no
+# label-aware metric for this control to bite on.
 
 # %%
 null_curve = meta.sweep(
-    adata,
-    metrics={"bio": metrics["bio"], "batch": metrics["batch"]},
-    perturbations={"permute_ct": pert.PermuteLabels("cell_type", stratify_by="batch")},
+    working,
+    metrics,
+    {"permute_celltype": pert.PermuteLabels("celltype", stratify_by="sample")},
     doses=(0.0, 1.0),
     n_replicates=100,
     prepare=prepare,
     seed=0,
 )
-pl.null(null_curve, dose=1.0)
 meta.null_control(null_curve)
 
-# %% [markdown]
-# Paired metrics get their own sweep, over the perturbation that stashes the values it removed.
-# `variance_preservation` needs the matrix from before the masking, which only `InjectMissing`
-# records; asking for it after any other perturbation gives a `KeyError` row rather than a number.
-#
-# The expected reading: mean imputation piles imputed values onto each feature's centre, so the
-# variance ratio falls steadily as more values are imputed. The dose-0 value already sits below 1
-# because `prepare` imputes the missingness the dataset arrived with.
-
 # %%
-imputation_curve = meta.sweep(
-    adata,
-    metrics={"variance_preservation": lambda a: variance_preservation(a.layers["truth"], a.X)["median_ratio"]},
-    perturbations={"missing": pert.InjectMissing(mechanism="mnar")},
-    doses=(0.0, 0.2, 0.4, 0.6),
-    n_replicates=20,
-    prepare=prepare,
-    seed=0,
-)
-pl.response(imputation_curve)
-meta.response_shape(imputation_curve)
+pl.null(null_curve, dose=1.0)
