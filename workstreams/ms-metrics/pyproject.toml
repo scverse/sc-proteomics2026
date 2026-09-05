@@ -24,8 +24,10 @@ dynamic = [ "version" ]
 dependencies = [
   "alphapepttools",
   "anndata",
+  "gdown",
   "numpy",
   "pandas",
+  "platformdirs>=4.11.7",
 ]
 optional-dependencies.dev = [
   "pre-commit",
