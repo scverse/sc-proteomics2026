@@ -40,67 +40,8 @@ import pandas as pd
 from msmetrics.datasets import wu2025
 from msmetrics import utils
 
-# %% [markdown]
-# ### Analysis workflow:
-
 # %%
-# ### 1. Load data (I/O)
 adata = ad.read_h5ad(wu2025())
-adata
-
-# %%
-# ### 2. Log-transform (Preprocessing)
-# Data is already log-transformed!
-# adata_log = apt.pp.nanlog(adata, copy = True)
-
-# %%
-# ### 3. Visualize data completeness (QC-inspection)
-
-# Visualize the missing values (diagnose)
-utils.draw_missingness(
-    X=adata.X,
-    xlabel="Features",
-    ylabel="Samples",
-    title="Missingness Heatmap",
-)
-
-# Flag features that are more than 60 % missing
-print("--> Dropping too incomplete features", flush = True)
-apt.pp.filter_data_completeness(
-    adata = adata,
-    max_missing_fraction = 0.6,
-    action = "drop",
-)
-
-# Compute actual completeness in features
-apt.metrics.fraction_complete(
-    adata=adata,
-)
-
-# Compute median intensity of features
-adata.obs["median_intensity"] = np.nanmedian(adata.X, axis=1)
-
-# Flag outliers based on median absolute deviation
-adata.obs["outlier"] = utils.mad_outlier(adata.obs["fraction_complete"], n_mad=3, direction="down") | utils.mad_outlier(
-    adata.obs["median_intensity"], n_mad=3, direction="both"
-)
-
-# Remove outliers
-print("--> Dropping too outlier samples", flush = True)
-print(f"Removing {adata.obs['outlier'].sum()} outlier samples: more than 3 MADs from the median", flush = True)
-adata = adata[~adata.obs["outlier"]]
-
-# %%
-# ### 4. Normalization
-
-# %%
-# ### 5. Imputation
-
-# %%
-# ### 6. Batch correction
-
-# %%
-# ### 7. Differential expression (out of scope)
 
 # %% [markdown]
 # ## Meta-benchmarking: do the metrics themselves behave?

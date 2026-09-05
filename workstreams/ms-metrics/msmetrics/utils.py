@@ -108,6 +108,36 @@ def draw_missingness(
     else:
         plt.show()
 
+def draw_ranked_median_intensities(
+    X: np.ndarray,
+    *,
+    xlabel: str | None = None,
+    ylabel: str | None = None,
+    title: str | None = None,
+    figsize: tuple[float, float] = (5, 2),
+    return_figure: bool = False,
+) -> plt.Figure:
+    """Generate a ranked plot of median intensities per sample."""
+
+    X = np.asarray(X)
+    medians = np.nanmedian(X, axis=0)
+
+    medians = np.sort(medians)[::-1]
+
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.plot(medians, marker="o")
+    ax.set_ylim(bottom=0)
+    if xlabel:
+        ax.set_xlabel(xlabel)
+    if ylabel:
+        ax.set_ylabel(ylabel)
+    if title:
+        ax.set_title(title)
+
+    if return_figure:
+        return fig
+    else:
+        plt.show()
 
 def variance_preservation(
     observed: np.ndarray,
