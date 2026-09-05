@@ -38,7 +38,7 @@ import anndata as ad
 import alphapepttools as apt
 
 from msmetrics.datasets import wu2025
-from msmetrics.utils import draw_missingness
+from msmetrics import utils
 
 # %% [markdown]
 # ### Analysis workflow:
@@ -55,11 +55,34 @@ adata
 
 # %%
 # ### 3. Visualize data completeness (QC-inspection)
-draw_missingness(
+
+# Visualize the missing values (diagnose)
+utils.draw_missingness(
     X = adata.X,
     xlabel = "Features",
     ylabel = "Samples",
     title = "Missingness Heatmap",
+)
+
+# Flag features that are more than 60 % missing
+number_of_samples = adata.shape[0]  # number of samples
+apt.pp.filter_data_completeness(
+    adata = adata,
+    max_missing_fraction = 0.6,
+    action = "flag"
+)
+
+# Compute actual completeness in features
+apt.metrics.fraction_complete(
+    adata=adata,
+)
+
+# Compute median intensity of features
+adata.obs["median_intensity"] = np.nanmedian(adata.X, axis=1)
+
+# Flag outliers based on median absolute deviation
+adata.obs["outlier"] = utils.mad_outlier(adata.obs["fraction_complete"], n_mad=3, direction="down") | utils.mad_outlier(
+    adata.obs["median_intensity"], n_mad=3, direction="both"
 )
 
 # %%
