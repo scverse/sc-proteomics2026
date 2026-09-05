@@ -244,7 +244,8 @@ curve.head()
 # | Column | Comparable across metrics? | Why |
 # | --- | --- | --- |
 # | `value`, `floor`, `ceiling`, `dynamic_range` | **No** | Raw metric units. Kept for reading one metric's curve, never for ranking two. |
-# | `range_over_noise` | **Yes** | `dynamic_range / sd₀`. The headline number. |
+# | `range_over_noise` | **Yes, with care** | `dynamic_range / sd₀`. Comparable only while every `sd₀` is a real noise estimate — see the second caution below. |
+# | `response_profile` shares | **Yes** | Each perturbation as a fraction of that metric's own strongest response. A ratio taken within one row, so `sd₀` cancels out of it exactly and it survives a degenerate reference dose. |
 # | `signal_slope`, `nuisance_slope` | **Yes** | Already reference-SD per unit dose. |
 # | `contrast` | **Yes** | Bounded in `[-1, 1]` by construction, so it cannot be inflated by a near-zero denominator. |
 # | `spearman`, `monotone_fraction` | **Yes** | Rank-based and unit-free already. |
@@ -263,12 +264,15 @@ curve.head()
 #   "are this metric's values comparable between datasets of different size", which is a useful
 #   thing to know and a different question from the one the other columns answer.
 # - **That caveat bites here.** `point_cluster_distance` returns exactly 1.0000 at dose 0 -- the
-#   cluster centroids are defined on the reference space, so the two distance matrices agree to
-#   numerical precision -- which leaves `sd₀` around `1e-5` and sends its `range_over_noise` into the
-#   tens of thousands, against roughly 130 for `neighborhood_preservation`. That ratio is a collapsed
-#   denominator, not a real advantage. When a metric is degenerate at the reference dose, rank it on
-#   `spearman`, `saturation_dose` and `contrast` instead, and treat its standardised columns as
-#   unusable. `reference_noise` is the first table to look at for exactly this reason.
+#   cluster centroids are defined on the reference space, so at dose 0 it compares that space against
+#   itself -- which leaves `sd₀` around `1e-5` and sends its `range_over_noise` into the tens of
+#   thousands, against roughly 350 for `neighborhood_preservation`. That ratio is a collapsed
+#   denominator, not a real advantage.
+#
+#   This is why the scorecard below reports *shares of each metric's own peak* rather than
+#   `range_over_noise`: the shares are a within-row ratio, so `sd₀` cancels and they stay meaningful
+#   for a degenerate metric even though its peak does not. `response_profile` flags such a metric in
+#   `sd_0_degenerate` and the table blanks only the affected column.
 # - `sd₀` is estimated from `n_replicates` values at dose 0, so every standardised column inherits
 #   that estimate's uncertainty. With the 30 replicates used here it is stable enough to rank
 #   metrics; with 5 it would not be.
@@ -276,70 +280,67 @@ curve.head()
 
 # %%
 def summarize(curve, *, signal, nuisance, null_curve=None, ax=None):
-    """One row per metric: its noise, its response to each perturbation, and its specificity.
+    """One row per metric: what it responds to, how strongly, and whether it tracks biology.
 
-    Everything here is already standardised by each metric's own reference noise, so the rows are
-    on a common footing -- see the table above for which columns that does and does not apply to.
+    The response columns are each perturbation's share of that metric's own strongest response, so a
+    row reads as a profile -- what this metric is actually measuring -- rather than as six numbers on
+    an unbounded scale. Being a ratio taken within one row, the shares do not depend on `sd_0`, which
+    is what makes them comparable between metrics whose reference noise differs by orders of
+    magnitude. The absolute scale survives as the single `peak` column.
     """
     import matplotlib.pyplot as plt
     from plottable import ColumnDefinition, Table
     from plottable.cmap import centered_cmap
 
-    shape = meta.response_shape(curve).pivot(index="metric", columns="perturbation", values="range_over_noise")
+    profile = meta.response_profile(curve).set_index("metric")
     detection = (
         meta.sensitivity(curve)
         .groupby(["perturbation", "metric"])["detection_dose"]
         .first()
         .unstack(level="perturbation")
     )
-    specificity = meta.specificity(curve, signal=signal, nuisance=nuisance).set_index("metric")
+    contrast = meta.specificity(curve, signal=signal, nuisance=nuisance).set_index("metric")["contrast"]
 
-    table = shape.copy()
-    responses = list(table.columns)
+    responses = [name for name in profile.columns if name in set(curve["perturbation"])]
+    table = profile[responses].copy()
+    # `peak` is meaningless where the reference dose is degenerate, but the shares beside it are not,
+    # because `sd_0` cancels out of a within-row ratio. Suppress only the column that is affected.
+    table["peak"] = [
+        "sd0 ~ 0" if degenerate else f"{value:,.0f}x"
+        for value, degenerate in zip(profile["peak"], profile["sd_0_degenerate"])
+    ]
     table["detects"] = detection[signal]
-    table["contrast"] = specificity["contrast"]
-    table["sd0"] = meta.reference_noise(curve).set_index("metric")["sd_0"]
+    table["contrast"] = contrast
+    table["tracks_bio"] = [
+        "n/a" if not np.isfinite(value) else f"{'yes' if value > 0 else 'no'} ({value:+.2f})" for value in contrast
+    ]
     if null_curve is not None:
         table["null_p"] = meta.null_control(null_curve).set_index("metric")["p_value"]
     table = table.reset_index()
 
-    ax = ax if ax is not None else plt.subplots(figsize=(1.8 * len(table.columns), 1.0 + 0.6 * len(table)))[1]
-
-    # Colour on a log scale, and print the raw number. A metric that is degenerate at the reference
-    # dose blows its `range_over_noise` up by orders of magnitude -- `point_cluster_distance` reaches
-    # five figures here -- and on a linear encoding such as bar length that one row flattens every
-    # other to an invisible sliver. Log colour keeps all the rows legible; the caveat above says why
-    # the big number should not be read as an advantage in the first place.
-    magnitudes = table[responses].to_numpy(float)
-    magnitudes = magnitudes[np.isfinite(magnitudes) & (magnitudes > 0)]
-    low, high = (np.log10(magnitudes.min()), np.log10(magnitudes.max())) if magnitudes.size else (0.0, 1.0)
-
-    def response_colour(value):
-        if not np.isfinite(value) or value <= 0:
-            return "#f2f2f2"
-        position = (np.log10(value) - low) / (high - low) if high > low else 0.5
-        return plt.get_cmap("Blues")(0.06 + 0.5 * position)
+    ax = ax if ax is not None else plt.subplots(figsize=(1.7 * len(table.columns), 1.0 + 0.6 * len(table)))[1]
+    shares = plt.get_cmap("Blues")
 
     definitions = [
         ColumnDefinition("metric", width=2.4, textprops={"ha": "left", "weight": "bold"}),
-        ColumnDefinition("sd0", title="sd₀", width=0.8, formatter="{:.4f}", group="noise"),
         *[
             ColumnDefinition(
                 name,
                 title=name.replace("_", "\n"),
                 width=1.0,
-                group="response  (range / noise, log colour)",
-                formatter=lambda v: "-" if not np.isfinite(v) else f"{v:,.0f}",
-                cmap=response_colour,
+                group="responds to  (% of its own peak)",
+                formatter=lambda v: f"{v:.0%}",
+                # Fixed [0, 1] domain, so a cell means the same thing in every row.
+                cmap=lambda v: shares(0.06 + 0.5 * v) if np.isfinite(v) else "#f2f2f2",
             )
             for name in responses
         ],
+        ColumnDefinition("peak", title="peak\nrange/noise", width=1.1, group="strength"),
         ColumnDefinition("detects", title=f"detects\n{signal}", width=1.0, formatter="{:.3f}", group="sensitivity"),
         ColumnDefinition(
-            "contrast",
+            "tracks_bio",
             title=f"vs {nuisance}",
-            width=1.0,
-            formatter="{:.2f}",
+            width=1.3,
             group="specificity",
             text_cmap=centered_cmap(table["contrast"].fillna(0), cmap=plt.get_cmap("RdBu"), center=0),
         ),
@@ -354,6 +355,8 @@ def summarize(curve, *, signal, nuisance, null_curve=None, ax=None):
         table,
         ax=ax,
         index_col="metric",
+        # `contrast` is carried only to colour `tracks_bio`; `metric` becomes the index.
+        columns=[name for name in table.columns if name not in {"metric", "contrast"}],
         column_definitions=definitions,
         textprops={"fontsize": 10, "ha": "center"},
         row_dividers=True,
@@ -432,7 +435,14 @@ pl.null(null_curve, dose=1.0)
 # %% [markdown]
 # ### The scorecard
 #
-# One row per metric, standardised so the rows can be compared directly.
+# One row per metric. Each response cell is that perturbation's share of the metric's *own* strongest
+# response, so a row reads as a profile -- what is this metric actually measuring? -- instead of six
+# numbers on an unbounded scale. The absolute strength survives as the single `peak` column, blanked
+# where the reference dose is degenerate and the number would be meaningless.
+#
+# Read a row across: a metric whose peak sits on `missing_mnar` with near-zero elsewhere is a
+# missingness detector, whatever else it is named; one that responds to everything at roughly equal
+# strength is a generic "something changed" alarm and cannot tell you *what* changed.
 
 # %%
 summarize(curve, signal="dilute_celltype", nuisance="loading_offset", null_curve=null_curve)
