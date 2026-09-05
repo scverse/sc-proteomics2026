@@ -26,6 +26,8 @@ dependencies = [
   "anndata",
   "numpy",
   "pandas",
+  "scikit-learn",
+  "scipy",
 ]
 optional-dependencies.dev = [
   "pre-commit",
