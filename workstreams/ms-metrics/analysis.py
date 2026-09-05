@@ -48,11 +48,12 @@ adata = ad.read_h5ad(wu2025())
 adata
 
 # %%
-adata_log = apt.pp.nanlog(adata, copy = True)
+# Data is already log-transformed!
+# adata_log = apt.pp.nanlog(adata, copy = True)
 
 # %%
 draw_missingness(
-    X = adata_log.X,
+    X = adata.X,
     xlabel = "Features",
     ylabel = "Samples",
     title = "Missingness Heatmap",
