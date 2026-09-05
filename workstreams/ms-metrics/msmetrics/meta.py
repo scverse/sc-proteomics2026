@@ -415,7 +415,15 @@ def response_shape(curve: pd.DataFrame, *, saturation: float = 0.9) -> pd.DataFr
         usable = group.dropna(subset=["value"])
         rho = usable[["dose", "value"]].corr(method="spearman").iloc[0, 1] if len(usable) > 2 else float("nan")
 
+        # Drop doses the metric could not be computed at, rather than reading the response off a
+        # `nan`. Masking every observed value, for instance, leaves nothing for an imputation metric
+        # to score, and taking the dynamic range from that dose would silently void the whole row.
         means = group.groupby("dose", sort=True)["value"].mean()
+        means = means[np.isfinite(means)]
+        if means.size < 2:
+            rows.append(_empty_shape(perturbation, metric, reference_dose))
+            continue
+
         doses = means.index.to_numpy(dtype=float)
         values = means.to_numpy(dtype=float)
         steps = np.diff(values)
@@ -441,11 +449,29 @@ def response_shape(curve: pd.DataFrame, *, saturation: float = 0.9) -> pd.DataFr
                 "saturation_dose": _crossing(doses, np.abs(values - values[0]), saturation * abs(total))
                 if abs(total) > _EPS
                 else float("nan"),
+                "max_usable_dose": float(doses[-1]),
                 "reference_dose": reference_dose,
             }
         )
 
     return pd.DataFrame(rows)
+
+
+def _empty_shape(perturbation: str, metric: str, reference_dose: float) -> dict:
+    """Row for a metric that could not be computed at enough doses to have a shape."""
+    return {
+        "perturbation": perturbation,
+        "metric": metric,
+        "spearman": float("nan"),
+        "monotone_fraction": float("nan"),
+        "floor": float("nan"),
+        "ceiling": float("nan"),
+        "dynamic_range": float("nan"),
+        "range_over_noise": float("nan"),
+        "saturation_dose": float("nan"),
+        "max_usable_dose": float("nan"),
+        "reference_dose": reference_dose,
+    }
 
 
 def specificity(curve: pd.DataFrame, *, signal: str, nuisance: str) -> pd.DataFrame:

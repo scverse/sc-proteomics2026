@@ -270,3 +270,23 @@ def test_plots_draw_what_the_summaries_report():
     np.testing.assert_allclose(ax.images[0].get_array().data, expected.to_numpy(float))
 
     assert plotting.specificity(curve, signal="dilute", nuisance="loading").get_xlabel().startswith("|loading|")
+
+
+def test_response_shape_ignores_doses_the_metric_could_not_reach():
+    """A dose where the metric is `nan` must not void the whole row.
+
+    Masking every observed value leaves an imputation metric nothing to score, so the top of the
+    grid can legitimately be `nan`; the response below it is still the answer.
+    """
+    curve = synthetic_curve(lambda d: 1.0 - d)
+    curve.loc[np.isclose(curve["dose"], 1.0), "value"] = np.nan
+
+    shape = meta.response_shape(curve).iloc[0]
+    assert shape["max_usable_dose"] == 0.75
+    assert shape["dynamic_range"] == pytest.approx(0.75, abs=0.05)
+    assert shape["monotone_fraction"] == 1.0
+    assert shape["spearman"] < -0.9
+
+    everything_nan = synthetic_curve(lambda d: 1.0 - d)
+    everything_nan["value"] = np.nan
+    assert not np.isfinite(meta.response_shape(everything_nan).iloc[0]["dynamic_range"])
