@@ -23,7 +23,7 @@
 # - Changing data shape (Filtering): mask features or samples
 # - Changing data distribution (Normalization/Batch Correction): move & rescale samples or features
 #
-# Each step consists of a metric to answer a given question (e.g. computing data completeness, outliers, distributions, clustering) and a method that changes the data. For example, checking the metric data completeness and seeing that 12 % of features are less than 10 % complete across all samples could inform using a method for filtering for data completeness. Checking for completeness and removing incomplete features would then constitute one step in the analysis of a dataset. An ideal analysis would then be a sequence of steps, each of which consists of metric + method. 
+# Each step consists of a metric to answer a given question (e.g. computing data completeness, outliers, distributions, clustering) and a method that changes the data. For example, checking the metric data completeness and seeing that 12 % of features are less than 10 % complete across all samples could inform using a method for filtering for data completeness. Checking for completeness and removing incomplete features would then constitute one step in the analysis of a dataset. An ideal analysis would then be a sequence of steps, each of which consists of metric + method.
 #
 
 # %% [markdown]
@@ -32,10 +32,10 @@
 # - https://www.nature.com/articles/s41467-025-64718-y main reference for batch correction on different proteomics data levels
 
 # %%
-import pandas as pd
-import numpy as np
-import anndata as ad
 import alphapepttools as apt
+import anndata as ad
+import numpy as np
+import pandas as pd
 
 from msmetrics.datasets import wu2025
 from msmetrics.utils import draw_missingness
@@ -56,14 +56,14 @@ adata
 # %%
 # ### 3. Visualize data completeness (QC-inspection)
 draw_missingness(
-    X = adata.X,
-    xlabel = "Features",
-    ylabel = "Samples",
-    title = "Missingness Heatmap",
+    X=adata.X,
+    xlabel="Features",
+    ylabel="Samples",
+    title="Missingness Heatmap",
 )
 
 # %%
-# ### 4. Normalization 
+# ### 4. Normalization
 
 # %%
 # ### 5. Imputation
@@ -73,3 +73,352 @@ draw_missingness(
 
 # %%
 # ### 7. Differential expression (out of scope)
+
+# %% [markdown]
+# ## Meta-benchmarking: do the metrics themselves behave?
+#
+# A metric that returns a number for every dataset is not thereby useful. `msmetrics.meta` perturbs
+# the data by a known amount, recomputes each metric, and reads the resulting dose-response curve
+# four ways: does the metric collapse when the signal is destroyed (`null_control`), how much damage
+# does it take to notice (`sensitivity`), is the response monotone and wide enough to read
+# (`response_shape`), and does it move with biology or with a technical confound (`specificity`).
+#
+# Below we run every metric the package ships against every perturbation, on wu2025.
+
+# %% [markdown]
+# ### Working set
+#
+# Two thirds of the proteins are observed in under 5 % of cells, and 1094 of the 2599 cells carry no
+# `celltype` or `sample` label at all. Both have to go before any of this means anything.
+
+# %%
+import warnings
+
+from sklearn.utils.extmath import randomized_svd
+
+from msmetrics import compute_neighborhood_preservation, meta, variance_preservation
+from msmetrics import perturbations as pert
+from msmetrics import plotting as pl
+from msmetrics.utils import perform_leiden_clustering, point_cluster_distance
+
+MIN_COMPLETENESS = 0.2
+N_COMPONENTS = 15
+
+labelled = adata[adata.obs["celltype"].notna() & adata.obs["sample"].notna()].copy()
+complete = np.isfinite(np.asarray(labelled.X, float)).mean(axis=0) >= MIN_COMPLETENESS
+working = labelled[:, complete].copy()
+working.obs["celltype"] = working.obs["celltype"].cat.remove_unused_categories()
+working.obs["sample"] = working.obs["sample"].cat.remove_unused_categories()
+
+print(working.shape, f"{np.mean(~np.isfinite(np.asarray(working.X, float))):.1%} missing")
+pd.crosstab(working.obs["celltype"], working.obs["sample"])
+
+# %% [markdown]
+# ### One embedding, shared by every metric
+#
+# If each metric computed its own PCA, a difference in their measured sensitivity would partly be a
+# difference in their preprocessing. `prepare` runs once per replicate and hands every metric the
+# same imputed matrix and the same embedding.
+#
+# It also carries the three references the paired metrics need, all keyed by cell name so they
+# survive the per-replicate subsampling:
+#
+# - the matrix as it stood before imputation, for `variance_preservation`;
+# - the embedding of the *untouched* dataset, for `neighborhood_preservation`;
+# - the untouched imputed matrix and its Leiden labels, for `point_cluster_distance`. Clusters are
+#   defined on the *before* space by construction, so Leiden runs once here rather than 1800 times
+#   inside the sweep.
+
+
+# %%
+def embed(X, n_components=N_COMPONENTS, seed=0):
+    """Mean-impute the missing values, then take the leading left singular vectors."""
+    with warnings.catch_warnings():
+        # A protein can end up fully masked at a high missingness dose, which has no mean. Those
+        # columns fall back to zero below, so the warning carries nothing.
+        warnings.filterwarnings("ignore", category=RuntimeWarning, message="Mean of empty slice")
+        column = np.nanmean(np.where(np.isfinite(X), X, np.nan), axis=0)
+    Y = np.where(np.isfinite(X), X, np.nan_to_num(column)[None, :])
+    Y = Y - Y.mean(axis=0)
+    U, S, _ = randomized_svd(Y, n_components=n_components, random_state=seed)
+    return Y, U * S
+
+
+reference_matrix, reference_coordinates = embed(np.asarray(working.X, float))
+reference_matrix = pd.DataFrame(reference_matrix, index=working.obs_names)
+reference_embedding = pd.DataFrame(reference_coordinates, index=working.obs_names)
+
+_clustered = working.copy()
+_clustered.X = reference_matrix.to_numpy()
+perform_leiden_clustering(_clustered)
+reference_clusters = _clustered.obs["_leiden"]
+print(f"{reference_clusters.nunique()} Leiden clusters on the untouched data")
+
+
+def prepare(a, rng):
+    observed = np.asarray(a.X, float)
+    imputed, embedding = embed(observed)
+    a.layers["pre_imputation"] = observed
+    a.layers["reference"] = reference_matrix.loc[a.obs_names].to_numpy()
+    a.layers["perturbed"] = imputed
+    a.X = imputed
+    a.obsm["X_pca"] = embedding
+    a.obsm["X_pca_reference"] = reference_embedding.loc[a.obs_names].to_numpy()
+    a.obs["_leiden"] = reference_clusters.loc[a.obs_names].cat.remove_unused_categories()
+    return a
+
+
+def _point_cluster_distance(a):
+    with warnings.catch_warnings():
+        # Masking every observed value leaves a constant matrix, whose cell-to-centroid distances
+        # are all equal and whose Spearman correlation is therefore undefined. That top dose is
+        # legitimately unscoreable; `response_shape` drops it and reports `max_usable_dose`.
+        warnings.filterwarnings("ignore", message="An input array is constant")
+        return point_cluster_distance(a, "reference", "perturbed")
+
+
+metrics = {
+    "neighborhood_preservation": lambda a: compute_neighborhood_preservation(a, "X_pca_reference", "X_pca")[
+        "adjusted_overlap"
+    ],
+    "point_cluster_distance": _point_cluster_distance,
+    "variance_preservation": lambda a: variance_preservation(a.layers["pre_imputation"], a.X)["median_ratio"],
+}
+
+perturbations = {
+    "dilute_celltype": pert.DiluteSignal("celltype"),  # biology
+    "loading_offset": pert.InjectLoadingOffset(),  # cell size
+    "batch_shift": pert.InjectBatchShift("sample"),  # batch
+    "missing_mnar": pert.InjectMissing(mechanism="mnar"),  # missingness, hence imputation strength
+    # Structure held fixed, only the cell count falls -- stratified on the full celltype x sample
+    # table, not each margin, because the two are correlated here.
+    "subsample": pert.SubsampleCells(["celltype", "sample"]),
+    # `sample` is confounded with `celltype` here -- GW13 is mostly IN-CGE and oRG -- so a global
+    # permutation would destroy the batch x celltype table too. Permute within sample instead.
+    "permute_celltype": pert.PermuteLabels("celltype", stratify_by="sample"),
+}
+
+# %%
+curve = meta.sweep(
+    working,
+    metrics,
+    perturbations,
+    doses=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+    n_replicates=30,
+    prepare=prepare,
+    seed=0,
+)
+curve.head()
+
+# %% [markdown]
+# ### How to read the figures
+#
+# | Figure | What is on it | How to read it | Why it is built that way |
+# | --- | --- | --- | --- |
+# | `pl.response` | Mean ± sd of each metric against dose, one panel per perturbation. The pale horizontal band is the dose-0 noise, `mean₀ ± n_sd·sd₀`; the dotted vertical line is the interpolated detection dose. | Steepness near the origin is sensitivity. Flattening is saturation — everything to the right of it carries no information. A curve that never leaves the band means the metric is blind to that perturbation. | Sensitivity, monotonicity, range and saturation are four properties of one curve; splitting them across four tables loses the shape that makes them legible. Drawing the noise band turns "is this move real?" into something you can see rather than something you have to look up. |
+# | `pl.null` | Histogram of the metric after the labels are destroyed, with the real-label value as a red rule. | Rule inside the histogram: the metric is not reading the labels. Rule far outside: it is, and `z` says by how much. | Direction-free. Nothing here needs to know whether high or low is "good" for a given metric, so it works on any metric without registering an expected value. |
+# | `pl.scorecard` | Metric × perturbation heatmap of one summary column. | Read a **row** for one metric's response profile — what it notices and what it ignores. Read a **column** to pick the metric for a given failure mode. | The one-glance answer to "which metric for which job". Defaults to `range_over_noise` rather than `dynamic_range` for the reason in the next table. |
+# | `pl.specificity` | \|biology slope\| against \|nuisance slope\|, one point per metric, with the `y = x` diagonal. | Above the diagonal: tracks biology. Below: tracks the confound. Near the origin: responds to neither, whatever the contrast says. | It plots both coordinates instead of their ratio. A point lands on the diagonal either by responding to everything or by responding to nothing, and a single contrast number cannot separate those two. |
+#
+# ### Comparing across metrics
+#
+# The trap: every metric lives on its own scale. `neighborhood_preservation` is an adjusted overlap
+# in `[0, 1]`, `point_cluster_distance` is a Spearman correlation in `[-1, 1]`, a variance ratio is
+# unbounded above, an iLISI runs from 1 to the number of batches. A drop of 0.4 is catastrophic for
+# one and unremarkable for another, so **no comparison may be made on raw metric values**.
+#
+# Everything the harness reports is therefore divided by that metric's *own* reference noise `sd₀`,
+# the spread it shows across replicates when nothing has been done to the data. The result is in
+# units of "how many detectable steps did the metric move", which is the same currency for every
+# metric on the page.
+#
+# | Column | Comparable across metrics? | Why |
+# | --- | --- | --- |
+# | `value`, `floor`, `ceiling`, `dynamic_range` | **No** | Raw metric units. Kept for reading one metric's curve, never for ranking two. |
+# | `range_over_noise` | **Yes** | `dynamic_range / sd₀`. The headline number. |
+# | `signal_slope`, `nuisance_slope` | **Yes** | Already reference-SD per unit dose. |
+# | `contrast` | **Yes** | Bounded in `[-1, 1]` by construction, so it cannot be inflated by a near-zero denominator. |
+# | `spearman`, `monotone_fraction` | **Yes** | Rank-based and unit-free already. |
+# | `detection_dose`, `saturation_dose` | **Yes, within one perturbation** | Expressed on the dose axis, which belongs to the perturbation rather than to the metric — but each perturbation has its own `dose_unit`, so do not compare a dose across columns. |
+# | `p_value`, `z` | **Yes** | Both are positions within the metric's own null distribution. |
+#
+# Two cautions that follow from this:
+#
+# - `range_over_noise` rewards a *precise* metric as much as a *responsive* one, since `sd₀` is in
+#   the denominator. A metric that is very reproducible while measuring the wrong thing scores well
+#   on it. Always read it next to `contrast`, which is what says whether the thing being measured is
+#   the thing you wanted.
+# - A response to `subsample` is **not** sensitivity. Nearest-neighbour and clustering estimators are
+#   biased by the number of cells, so they drift when the dataset shrinks even though its structure
+#   is untouched -- that is exactly what holding the composition fixed isolates. Read that column as
+#   "are this metric's values comparable between datasets of different size", which is a useful
+#   thing to know and a different question from the one the other columns answer.
+# - **That caveat bites here.** `point_cluster_distance` returns exactly 1.0000 at dose 0 -- the
+#   cluster centroids are defined on the reference space, so the two distance matrices agree to
+#   numerical precision -- which leaves `sd₀` around `1e-5` and sends its `range_over_noise` into the
+#   tens of thousands, against roughly 130 for `neighborhood_preservation`. That ratio is a collapsed
+#   denominator, not a real advantage. When a metric is degenerate at the reference dose, rank it on
+#   `spearman`, `saturation_dose` and `contrast` instead, and treat its standardised columns as
+#   unusable. `reference_noise` is the first table to look at for exactly this reason.
+# - `sd₀` is estimated from `n_replicates` values at dose 0, so every standardised column inherits
+#   that estimate's uncertainty. With the 30 replicates used here it is stable enough to rank
+#   metrics; with 5 it would not be.
+
+
+# %%
+def summarize(curve, *, signal, nuisance, null_curve=None, ax=None):
+    """One row per metric: its noise, its response to each perturbation, and its specificity.
+
+    Everything here is already standardised by each metric's own reference noise, so the rows are
+    on a common footing -- see the table above for which columns that does and does not apply to.
+    """
+    import matplotlib.pyplot as plt
+    from plottable import ColumnDefinition, Table
+    from plottable.cmap import centered_cmap
+
+    shape = meta.response_shape(curve).pivot(index="metric", columns="perturbation", values="range_over_noise")
+    detection = (
+        meta.sensitivity(curve)
+        .groupby(["perturbation", "metric"])["detection_dose"]
+        .first()
+        .unstack(level="perturbation")
+    )
+    specificity = meta.specificity(curve, signal=signal, nuisance=nuisance).set_index("metric")
+
+    table = shape.copy()
+    responses = list(table.columns)
+    table["detects"] = detection[signal]
+    table["contrast"] = specificity["contrast"]
+    table["sd0"] = meta.reference_noise(curve).set_index("metric")["sd_0"]
+    if null_curve is not None:
+        table["null_p"] = meta.null_control(null_curve).set_index("metric")["p_value"]
+    table = table.reset_index()
+
+    ax = ax if ax is not None else plt.subplots(figsize=(1.8 * len(table.columns), 1.0 + 0.6 * len(table)))[1]
+
+    # Colour on a log scale, and print the raw number. A metric that is degenerate at the reference
+    # dose blows its `range_over_noise` up by orders of magnitude -- `point_cluster_distance` reaches
+    # five figures here -- and on a linear encoding such as bar length that one row flattens every
+    # other to an invisible sliver. Log colour keeps all the rows legible; the caveat above says why
+    # the big number should not be read as an advantage in the first place.
+    magnitudes = table[responses].to_numpy(float)
+    magnitudes = magnitudes[np.isfinite(magnitudes) & (magnitudes > 0)]
+    low, high = (np.log10(magnitudes.min()), np.log10(magnitudes.max())) if magnitudes.size else (0.0, 1.0)
+
+    def response_colour(value):
+        if not np.isfinite(value) or value <= 0:
+            return "#f2f2f2"
+        position = (np.log10(value) - low) / (high - low) if high > low else 0.5
+        return plt.get_cmap("Blues")(0.06 + 0.5 * position)
+
+    definitions = [
+        ColumnDefinition("metric", width=2.4, textprops={"ha": "left", "weight": "bold"}),
+        ColumnDefinition("sd0", title="sd₀", width=0.8, formatter="{:.4f}", group="noise"),
+        *[
+            ColumnDefinition(
+                name,
+                title=name.replace("_", "\n"),
+                width=1.0,
+                group="response  (range / noise, log colour)",
+                formatter=lambda v: "-" if not np.isfinite(v) else f"{v:,.0f}",
+                cmap=response_colour,
+            )
+            for name in responses
+        ],
+        ColumnDefinition("detects", title=f"detects\n{signal}", width=1.0, formatter="{:.3f}", group="sensitivity"),
+        ColumnDefinition(
+            "contrast",
+            title=f"vs {nuisance}",
+            width=1.0,
+            formatter="{:.2f}",
+            group="specificity",
+            text_cmap=centered_cmap(table["contrast"].fillna(0), cmap=plt.get_cmap("RdBu"), center=0),
+        ),
+        *(
+            [ColumnDefinition("null_p", title="p", width=0.7, formatter="{:.3f}", group="null")]
+            if null_curve is not None
+            else []
+        ),
+    ]
+
+    Table(
+        table,
+        ax=ax,
+        index_col="metric",
+        column_definitions=definitions,
+        textprops={"fontsize": 10, "ha": "center"},
+        row_dividers=True,
+        col_label_divider=True,
+    )
+    return ax
+
+
+# %% [markdown]
+# ### Is the response monotone, and how much of it is usable?
+#
+# `max_usable_dose` shows where a sweep ran out of computable doses -- masking every observed value
+# leaves `variance_preservation` nothing to score, so its curve stops at 0.8.
+
+# %%
+meta.reference_noise(curve)
+
+# %%
+meta.response_shape(curve)
+
+# %%
+meta.sensitivity(curve).groupby(["perturbation", "metric"])["detection_dose"].first().unstack()
+
+# %%
+pl.response(curve)
+
+# %% [markdown]
+# ### Does the metric track biology, or the confound?
+#
+# `contrast` above 0 means the metric responds more strongly to diluted biology than to the
+# nuisance. Read both slopes as well: a contrast near zero is produced both by a metric that
+# responds to everything and by one that responds to nothing.
+#
+# Note that `prepare` here does no per-cell normalisation; median-normalising would cancel a scalar
+# loading offset outright, and re-running this with normalisation in `prepare` is the obvious next
+# experiment.
+
+# %%
+pd.concat(
+    meta.specificity(curve, signal="dilute_celltype", nuisance=nuisance)
+    for nuisance in ("loading_offset", "batch_shift", "missing_mnar")
+)
+
+# %%
+pl.specificity(curve, signal="dilute_celltype", nuisance="loading_offset")
+
+# %%
+pl.scorecard(curve, statistic="range_over_noise")
+
+# %% [markdown]
+# ### Null control
+#
+# The null control gets its own sweep: its p-value cannot fall below `1 / (n_replicates + 1)`, so
+# the 30 replicates above could never reach significance no matter how clearly a metric responded.
+
+# %%
+null_curve = meta.sweep(
+    working,
+    metrics,
+    {"permute_celltype": pert.PermuteLabels("celltype", stratify_by="sample")},
+    doses=(0.0, 1.0),
+    n_replicates=100,
+    prepare=prepare,
+    seed=0,
+)
+meta.null_control(null_curve)
+
+# %%
+pl.null(null_curve, dose=1.0)
+
+# %% [markdown]
+# ### The scorecard
+#
+# One row per metric, standardised so the rows can be compared directly.
+
+# %%
+summarize(curve, signal="dilute_celltype", nuisance="loading_offset", null_curve=null_curve)

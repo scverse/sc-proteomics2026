@@ -2,7 +2,7 @@
 
 __version__ = "0.1.0"
 
-from msmetrics import datasets, utils
+from msmetrics import datasets, meta, perturbations, plotting, utils
 from msmetrics.utils import (
     compute_neighborhood_preservation,
     neighborhood_preservation,
@@ -12,7 +12,10 @@ from msmetrics.utils import (
 __all__ = [
     "compute_neighborhood_preservation",
     "datasets",
+    "meta",
     "neighborhood_preservation",
+    "perturbations",
+    "plotting",
     "utils",
     "variance_preservation",
 ]
