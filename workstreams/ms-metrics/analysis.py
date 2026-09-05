@@ -38,6 +38,7 @@ import anndata as ad
 import alphapepttools as apt
 
 from msmetrics.datasets import wu2025
+from msmetrics.utils import draw_missingness
 
 # %% [markdown]
 # ### Getting the main dataset
@@ -45,3 +46,16 @@ from msmetrics.datasets import wu2025
 # %%
 adata = ad.read_h5ad(wu2025())
 adata
+
+# %%
+adata_log = apt.pp.nanlog(adata, copy = True)
+
+# %%
+draw_missingness(
+    X = adata_log.X,
+    xlabel = "Features",
+    ylabel = "Samples",
+    title = "Missingness Heatmap",
+)
+
+# %%
