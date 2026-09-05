@@ -41,17 +41,20 @@ from msmetrics.datasets import wu2025
 from msmetrics.utils import draw_missingness
 
 # %% [markdown]
-# ### Getting the main dataset
+# ### Analysis workflow:
 
 # %%
+# ### 1. Load data (I/O)
 adata = ad.read_h5ad(wu2025())
 adata
 
 # %%
+# ### 2. Log-transform (Preprocessing)
 # Data is already log-transformed!
 # adata_log = apt.pp.nanlog(adata, copy = True)
 
 # %%
+# ### 3. Visualize data completeness (QC-inspection)
 draw_missingness(
     X = adata.X,
     xlabel = "Features",
@@ -60,3 +63,13 @@ draw_missingness(
 )
 
 # %%
+# ### 4. Normalization 
+
+# %%
+# ### 5. Imputation
+
+# %%
+# ### 6. Batch correction
+
+# %%
+# ### 7. Differential expression (out of scope)
