@@ -3,6 +3,11 @@
 import warnings
 
 import numpy as np
+import scanpy as sc
+from scipy.sparse import csr_matrix
+from scipy.stats import spearmanr
+from sklearn.metrics import pairwise_distances
+from anndata import AnnData
 
 
 def variance_preservation(
@@ -127,3 +132,114 @@ def variance_preservation(
         "per_feature": ratio,
         "median_ratio": float(np.median(ratio[summarised])) if summarised.any() else float("nan"),
     }
+
+def perform_leiden_clustering(
+    adata: AnnData,
+    *,
+    resolution: float = 1.0,
+    n_neighbors: int = 15,
+    random_state: int = 0,
+):
+    """Cluster observations in AnnData using Leiden clustering.
+
+    Parameters
+    ----------
+    adata
+        Input with shape (n_cells, n_features).
+    resolution
+        Leiden resolution parameter. Higher values generally produce more
+        clusters.
+    n_neighbors
+        Number of neighbors used to construct the neighborhood graph.
+    random_state
+        Random seed for reproducibility.
+    """
+    if adata.shape[0] < 2:
+        raise ValueError("At least two observations are required.")
+
+    sc.pp.neighbors(
+        adata,
+        n_neighbors=min(n_neighbors, adata.shape[0] - 1),
+        use_rep="X",
+    )
+
+    sc.tl.leiden(
+        adata,
+        resolution=resolution,
+        random_state=random_state,
+        key_added="_leiden",
+    )
+
+def point_cluster_distance(adata: AnnData, before_layer: str, after_layer: str, cluster_key: str = "_leiden") -> float:
+    """Point Cluster Distance (PCD).
+    
+    Measures preservation of global cell-cell structure between `before`
+    and `after` using distances from cells to cluster centroids.
+
+    Clusters are determined in `before`. The same cluster assignments are
+    then used to compute centroids in both spaces. Cell-to-centroid distance
+    matrices are flattened and compared using Spearman correlation.
+
+    Parameters
+    ----------
+    before
+        Shape (n_cells, n_features_before). Matrix before a pp step.
+    after
+        Shape (n_cells, n_features_after). Matrix after a pp step.
+    cluster_labels
+        Clusters assignment of the cells in before and after.
+
+    Returns
+    -------
+    float
+        Spearman correlation between the PCD matrices. Higher is better.
+    """
+    # retreive clustering labels from the AnnData object
+    labels = adata.obs[cluster_key].cat.codes.to_numpy()
+    return _point_cluster_distance(
+        adata.layers[before_layer],
+        adata.layers[after_layer],
+        labels,
+    )
+
+def _point_cluster_distance(
+    before: csr_matrix,
+    after: csr_matrix,
+    cluster_labels: np.ndarray[int],
+) -> float:
+    """Point Cluster Distance (PCD).
+
+    Compute PCD given the before and after matrices and labels.
+    """
+    if before.shape[0] != after.shape[0]:
+        raise ValueError(
+            "`before` and `after` must contain the same number of cells."
+        )
+
+    # Compute centroids in before and after using the cluster labels.
+    n_clusters = np.unique(cluster_labels).shape[0]
+    def centroids(x: csr_matrix) -> np.ndarray:
+        return np.vstack([
+            np.asarray(x[cluster_labels == cluster].mean(axis=0)).ravel()
+            for cluster in range(n_clusters)
+        ])
+
+    before_centroids = centroids(before)
+    after_centroids = centroids(after)
+
+    # Distance from every cell to every centroid.
+    # Shapes: (n_cells, n_clusters)
+    before_distances = pairwise_distances(
+        before, before_centroids, metric="euclidean"
+    )
+    after_distances = pairwise_distances(
+        after, after_centroids, metric="euclidean"
+    )
+
+    # Compare the flattened PCD matrices using Spearman correlation.
+    correlation = spearmanr(
+        before_distances.ravel(),
+        after_distances.ravel(),
+    ).statistic
+
+    return float(correlation)
