@@ -31,6 +31,7 @@ dependencies = [
   "pandas",
   "platformdirs>=4.11.7",
   "scanpy",
+  "scib-metrics",
   "scikit-learn",
   "scipy",
 ]
