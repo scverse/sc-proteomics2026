@@ -2,7 +2,78 @@
 
 import warnings
 
+import alphapepttools as apt
+import matplotlib.pyplot as plt
 import numpy as np
+
+
+def draw_missingness(
+    X: np.ndarray,
+    *,
+    xlabel: str | None = None,
+    ylabel: str | None = None,
+    title: str | None = None,
+    figsize: tuple[float, float] = (5, 2),
+    return_figure: bool = False,
+) -> plt.Figure:
+    """Plot a matrix as a present/absent map, with rows and columns sorted by completeness.
+
+    Parameters
+    ----------
+    X
+        Observations x features array, missing values encoded as `nan`.
+    xlabel
+        Label for the x-axis. If `None` (default), the axis is left unlabelled.
+    ylabel
+        Label for the y-axis. If `None` (default), the axis is left unlabelled.
+    title
+        Title placed above the map. If `None` (default), no title is set.
+    figsize
+        Figure size in inches.
+    return_figure
+        Whether to return fig, e.g. for saving the plot
+
+
+    Returns
+    -------
+    plt.Figure
+        Figure holding the map and its legend.
+
+    Raises
+    ------
+    ValueError
+        If `X` is not two-dimensional.
+    """
+    X = np.asarray(X)
+    if X.ndim != 2:
+        raise ValueError("`X` must be a two-dimensional array of shape (observations, features).")
+
+    colors = {
+        "missing": apt.pl.BaseColors.get("lightred"),
+        "measured": apt.pl.BaseColors.get("green"),
+    }
+    palette = np.array([colors["missing"], colors["measured"]])
+
+    measured = np.isfinite(X).astype(int)
+    measured = measured[:, np.argsort(measured.sum(axis=0))[::-1]]
+    measured = measured[np.argsort(measured.sum(axis=1))[::-1], :]
+
+    fig, axes = apt.pl.create_figure(ncols=2, figsize=figsize, width_ratios=[6, 1])
+
+    ax_map = axes[0]
+    ax_map.imshow(palette[measured], aspect="auto")
+    ax_map.set_xticks([])
+    ax_map.set_yticks([])
+    apt.pl.label_axes(ax=ax_map, xlabel=xlabel, ylabel=ylabel, title=title)
+
+    ax_legend = axes[1]
+    ax_legend.axis("off")
+    apt.pl.add_legend_to_axes(ax=ax_legend, levels=colors)
+
+    if return_figure:
+        return fig
+    else:
+        plt.show()
 
 
 def variance_preservation(
