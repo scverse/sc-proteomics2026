@@ -3,6 +3,8 @@
 import warnings
 
 import numpy as np
+import scanpy as sc
+from scipy.sparse import csr_matrix
 
 
 def variance_preservation(
@@ -127,3 +129,14 @@ def variance_preservation(
         "per_feature": ratio,
         "median_ratio": float(np.median(ratio[summarised])) if summarised.any() else float("nan"),
     }
+
+
+def _neighborhood_preservation(before: csr_matrix, after: csr_matrix) -> float:
+    return (before == after).sum(axis=1)
+
+
+def compute_neighborhood_preservation(adata, embedding_before: str, embedding_after: str, knn: int = 20) -> float:
+    sc.pp.neighbors(adata, use_rep=embedding_before, n_neighbors=knn, key_added=embedding_before)
+    sc.pp.neighbors(adata, use_rep=embedding_after, n_neighbors=knn, key_added=embedding_before)
+
+    return _neighborhood_preservation(adata.obsp[embedding_before], adata.obsp[embedding_after])
