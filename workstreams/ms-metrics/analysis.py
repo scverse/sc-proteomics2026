@@ -235,15 +235,21 @@ curve.head()
 # | Column | Comparable across metrics? | Why |
 # | --- | --- | --- |
 # | `value`, `floor`, `ceiling`, `dynamic_range` | **No** | Raw metric units. Kept for reading one metric's curve, never for ranking two. |
-# | `range_over_noise` | **Yes** | `dynamic_range / sd₀`. The headline number. |
-# | `signal_slope`, `nuisance_slope` | **Yes** | Already reference-SD per unit dose. |
-# | `contrast` | **Yes** | Bounded in `[-1, 1]` by construction, so it cannot be inflated by a near-zero denominator. |
-# | `spearman`, `monotone_fraction` | **Yes** | Rank-based and unit-free already. |
-# | `detection_dose`, `saturation_dose` | **Yes, within one perturbation** | Expressed on the dose axis, which belongs to the perturbation rather than to the metric — but each perturbation has its own `dose_unit`, so do not compare a dose across columns. |
-# | `p_value`, `z` | **Yes** | Both are positions within the metric's own null distribution. |
+# | `response_profile` shares | **Yes** | A ratio taken *within* one row, so `sd₀` cancels out of it entirely. This is what `summarize` shows. |
+# | `contrast` | **Yes** | Same reason: both slopes carry the same `sd₀`, which cancels. Bounded in `[-1, 1]`, so a near-zero denominator cannot inflate it. |
+# | `spearman`, `monotone_fraction` | **Yes** | Rank-based and unit-free, computed on raw values with no denominator. |
+# | `saturation_dose` | **Yes, within one perturbation** | A fraction of the metric's own total change. Each perturbation has its own `dose_unit`, so do not compare a dose across columns. |
+# | `p_value`, `z` | **Yes** | Positions within the metric's own null distribution. |
+# | `range_over_noise`, `detection_dose`, `signal_slope`, `nuisance_slope` | **Only when `sd₀` is sound** | All divide by `sd₀`, so all inherit a collapsed denominator. `detection_dose` is the crossing of `2·sd₀`, so it fails in exactly the same way and for the same metrics. |
 #
-# Two cautions that follow from this:
+# So the ranking order is `contrast` and `spearman` first, the profile shares to see *what* a metric
+# measures, and the `sd₀`-dependent columns last and only after checking `reference_noise`.
 #
+# Three cautions that follow from this:
+#
+# - A share says nothing about magnitude. A metric that barely moves at all still has a 100 % column,
+#   namely whichever perturbation moved it least little. `peak` is what separates that case from a
+#   metric with real dynamic range, which is why the two are shown side by side.
 # - `range_over_noise` rewards a *precise* metric as much as a *responsive* one, since `sd₀` is in
 #   the denominator. A metric that is very reproducible while measuring the wrong thing scores well
 #   on it. Always read it next to `contrast`, which is what says whether the thing being measured is
@@ -257,87 +263,82 @@ curve.head()
 #   cluster centroids are defined on the reference space, so the two distance matrices agree to
 #   numerical precision -- which leaves `sd₀` around `1e-5` and sends its `range_over_noise` into the
 #   tens of thousands, against roughly 130 for `neighborhood_preservation`. That ratio is a collapsed
-#   denominator, not a real advantage. When a metric is degenerate at the reference dose, rank it on
-#   `spearman`, `saturation_dose` and `contrast` instead, and treat its standardised columns as
-#   unusable. `reference_noise` is the first table to look at for exactly this reason.
+#   denominator, not a real advantage. `summarize` flags it with `⚠ sd₀≈0` in the `peak` column and
+#   still shows that metric's shares, because those survive what the peak does not. The fix on the
+#   harness side would be to recompute the reference clustering per replicate so the metric has a
+#   real reference distribution; until then, rank it on `contrast` and `spearman`.
 # - `sd₀` is estimated from `n_replicates` values at dose 0, so every standardised column inherits
 #   that estimate's uncertainty. With the 30 replicates used here it is stable enough to rank
 #   metrics; with 5 it would not be.
 
 
 # %%
-def summarize(curve, *, signal, nuisance, null_curve=None, ax=None):
-    """One row per metric: its noise, its response to each perturbation, and its specificity.
+def summarize(curve, *, signal, nuisance, ax=None):
+    """One row per metric: what it responds to, how strongly, and whether it tracks biology.
 
-    Everything here is already standardised by each metric's own reference noise, so the rows are
-    on a common footing -- see the table above for which columns that does and does not apply to.
+    Each response cell is that perturbation's share of the metric's *own* largest response, so a row
+    reads as a sentence -- "100 % missingness, blind to everything else" -- and every row is on the
+    same 0 to 100 scale whatever units the metric itself uses. `peak` carries the absolute size that
+    the shares deliberately throw away, in units of the metric's reference noise.
     """
     import matplotlib.pyplot as plt
     from plottable import ColumnDefinition, Table
-    from plottable.cmap import centered_cmap
 
-    shape = meta.response_shape(curve).pivot(index="metric", columns="perturbation", values="range_over_noise")
-    detection = (
-        meta.sensitivity(curve)
-        .groupby(["perturbation", "metric"])["detection_dose"]
-        .first()
-        .unstack(level="perturbation")
-    )
-    specificity = meta.specificity(curve, signal=signal, nuisance=nuisance).set_index("metric")
+    profile = meta.response_profile(curve).set_index("metric")
+    contrast = meta.specificity(curve, signal=signal, nuisance=nuisance).set_index("metric")["contrast"]
 
-    table = shape.copy()
-    responses = list(table.columns)
-    table["detects"] = detection[signal]
-    table["contrast"] = specificity["contrast"]
-    table["sd0"] = meta.reference_noise(curve).set_index("metric")["sd_0"]
-    if null_curve is not None:
-        table["null_p"] = meta.null_control(null_curve).set_index("metric")["p_value"]
+    responses = [column for column in profile.columns if column in set(curve["perturbation"])]
+    table = profile[responses].copy()
+
+    # `peak` is suppressed where the reference noise collapsed, since dividing by it produced the
+    # number rather than measuring anything. The shares stay: they are a ratio within the row, so
+    # `sd_0` cancels out of them and they remain readable for exactly the metric whose peak does not.
+    table["peak"] = [
+        "⚠ sd₀≈0" if degenerate else f"{value:,.0f}×"
+        for value, degenerate in zip(profile["peak"], profile["sd_0_degenerate"])
+    ]
+    # Written out as text rather than left numeric, because plottable skips a `nan` before the
+    # formatter runs and the cell would come out blank -- indistinguishable from missing data, when
+    # what it means is that the metric responded to neither side and the contrast is undefined.
+    table["tracks_bio"] = [
+        "n/a" if not np.isfinite(value) else f"{'yes' if value > 0 else 'no'}  ({value:+.2f})"
+        for value in contrast.reindex(profile.index)
+    ]
     table = table.reset_index()
 
-    ax = ax if ax is not None else plt.subplots(figsize=(1.8 * len(table.columns), 1.0 + 0.6 * len(table)))[1]
+    ax = ax if ax is not None else plt.subplots(figsize=(1.5 * len(table.columns) + 3, 1.2 + 0.6 * len(table)))[1]
 
-    # Colour on a log scale, and print the raw number. A metric that is degenerate at the reference
-    # dose blows its `range_over_noise` up by orders of magnitude -- `point_cluster_distance` reaches
-    # five figures here -- and on a linear encoding such as bar length that one row flattens every
-    # other to an invisible sliver. Log colour keeps all the rows legible; the caveat above says why
-    # the big number should not be read as an advantage in the first place.
-    magnitudes = table[responses].to_numpy(float)
-    magnitudes = magnitudes[np.isfinite(magnitudes) & (magnitudes > 0)]
-    low, high = (np.log10(magnitudes.min()), np.log10(magnitudes.max())) if magnitudes.size else (0.0, 1.0)
-
-    def response_colour(value):
+    def share_colour(value):
         if not np.isfinite(value) or value <= 0:
-            return "#f2f2f2"
-        position = (np.log10(value) - low) / (high - low) if high > low else 0.5
-        return plt.get_cmap("Blues")(0.06 + 0.5 * position)
+            return "#f4f4f4"
+        return plt.get_cmap("Blues")(0.06 + 0.52 * value)
+
+    def contrast_colour(worded):
+        if worded == "n/a":
+            return "#999999"
+        magnitude = min(abs(float(worded.split("(")[1].rstrip(")"))), 0.5) / 0.5
+        return plt.get_cmap("RdBu")(0.5 + (0.45 if worded.startswith("yes") else -0.45) * magnitude)
 
     definitions = [
-        ColumnDefinition("metric", width=2.4, textprops={"ha": "left", "weight": "bold"}),
-        ColumnDefinition("sd0", title="sd₀", width=0.8, formatter="{:.4f}", group="noise"),
+        ColumnDefinition("metric", width=2.6, textprops={"ha": "left", "weight": "bold"}),
         *[
             ColumnDefinition(
                 name,
                 title=name.replace("_", "\n"),
                 width=1.0,
-                group="response  (range / noise, log colour)",
-                formatter=lambda v: "-" if not np.isfinite(v) else f"{v:,.0f}",
-                cmap=response_colour,
+                group="responds to  (% of its own peak)",
+                formatter=lambda v: "-" if not np.isfinite(v) else f"{v:.0%}",
+                cmap=share_colour,
             )
             for name in responses
         ],
-        ColumnDefinition("detects", title=f"detects\n{signal}", width=1.0, formatter="{:.3f}", group="sensitivity"),
+        ColumnDefinition("peak", title="peak\n(× noise)", width=1.1, group="how strongly"),
         ColumnDefinition(
-            "contrast",
+            "tracks_bio",
             title=f"vs {nuisance}",
-            width=1.0,
-            formatter="{:.2f}",
-            group="specificity",
-            text_cmap=centered_cmap(table["contrast"].fillna(0), cmap=plt.get_cmap("RdBu"), center=0),
-        ),
-        *(
-            [ColumnDefinition("null_p", title="p", width=0.7, formatter="{:.3f}", group="null")]
-            if null_curve is not None
-            else []
+            width=1.4,
+            group="tracks biology?",
+            text_cmap=contrast_colour,
         ),
     ]
 
@@ -421,4 +422,4 @@ pl.null(null_curve, dose=1.0)
 # One row per metric, standardised so the rows can be compared directly.
 
 # %%
-summarize(curve, signal="dilute_celltype", nuisance="loading_offset", null_curve=null_curve)
+summarize(curve, signal="dilute_celltype", nuisance="loading_offset")

@@ -42,6 +42,7 @@ counterpart to `perturbations.SubsampleCells`; bootstrap intervals on the detect
 """
 
 import random
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -50,6 +51,7 @@ from anndata import AnnData
 __all__ = [
     "null_control",
     "reference_noise",
+    "response_profile",
     "response_shape",
     "sensitivity",
     "specificity",
@@ -473,6 +475,81 @@ def _empty_shape(perturbation: str, metric: str, reference_dose: float) -> dict:
         "max_usable_dose": float("nan"),
         "reference_dose": reference_dose,
     }
+
+
+def response_profile(curve: pd.DataFrame, *, degenerate_at: float = 1e-4) -> pd.DataFrame:
+    """What each metric responds to, as a share of its own largest response.
+
+    `response_shape` reports `range_over_noise`, which is only comparable between metrics when every
+    `sd_0` is a genuine noise estimate. Dividing a metric's responses by the largest of its own
+    responses sidesteps that: the ratio is taken within one row, so `sd_0` cancels exactly, the same
+    way it cancels out of `specificity`'s contrast. What is left answers the question a reader
+    usually has -- what is this metric actually measuring? -- on a bounded scale.
+
+    Parameters
+    ----------
+    curve
+        Frame returned by `sweep`.
+    degenerate_at
+        A metric whose `sd_0` is smaller than this fraction of its own mean at the reference dose is
+        flagged as having no usable noise estimate. The test is relative rather than absolute because
+        metrics sit on different scales.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per metric: one column per perturbation holding that perturbation's share of the
+        metric's largest response, in `[0, 1]`; `peak`, the largest response itself in units of
+        reference noise; `peak_perturbation`, which perturbation it belongs to; `sd_0`; and
+        `sd_0_degenerate`.
+
+    Examples
+    --------
+    .. code-block:: python
+
+        profile = meta.response_profile(curve)
+        print(profile.set_index("metric")[["missing_mnar", "dilute_celltype", "peak"]])
+
+    Notes
+    -----
+    The shares survive a collapsed `sd_0`, but `peak` does not. A metric that is deterministic at the
+    reference dose -- one comparing the reference against itself, for instance -- has a `sd_0` near
+    zero and a `peak` inflated by orders of magnitude, which is why it is flagged rather than
+    presented. Read the shares of such a metric and ignore its `peak`.
+
+    A share says nothing about magnitude. A metric that barely moves at all still has a 100 % column,
+    namely whichever perturbation moved it least little. `peak` is what separates that case from a
+    metric with real dynamic range, so the two columns are meant to be read together.
+    """
+    shape = response_shape(curve)
+    responses = shape.pivot(index="metric", columns="perturbation", values="range_over_noise")
+    magnitudes = responses.to_numpy(dtype=float)
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=RuntimeWarning, message="All-NaN slice encountered")
+        peak = np.nanmax(np.where(np.isfinite(magnitudes), magnitudes, np.nan), axis=1)
+    usable = np.isfinite(peak) & (peak > _EPS)
+
+    shares = np.divide(
+        magnitudes,
+        peak[:, None],
+        out=np.zeros_like(magnitudes),
+        where=usable[:, None] & np.isfinite(magnitudes),
+    )
+
+    noise = reference_noise(curve).set_index("metric").reindex(responses.index)
+    scale = np.maximum(np.abs(noise["mean_0"].to_numpy(dtype=float)), _EPS)
+
+    profile = pd.DataFrame(shares, index=responses.index, columns=responses.columns)
+    profile["peak"] = np.where(usable, peak, 0.0)
+    profile["peak_perturbation"] = [
+        responses.columns[int(np.nanargmax(row))] if ok else None
+        for row, ok in zip(np.where(np.isfinite(magnitudes), magnitudes, -np.inf), usable)
+    ]
+    profile["sd_0"] = noise["sd_0"].to_numpy(dtype=float)
+    profile["sd_0_degenerate"] = profile["sd_0"].to_numpy(dtype=float) / scale < degenerate_at
+
+    return profile.reset_index()
 
 
 def specificity(curve: pd.DataFrame, *, signal: str, nuisance: str) -> pd.DataFrame:

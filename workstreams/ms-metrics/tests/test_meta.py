@@ -353,3 +353,71 @@ def test_a_plateau_is_saturation_not_a_monotonicity_violation():
 
     reversing = synthetic_curve(lambda d: d if d <= 0.5 else 1.0 - d, noise=0.0)
     assert meta.response_shape(reversing).iloc[0]["monotone_fraction"] < 1.0
+
+
+def two_perturbation_curve(strong, weak, *, sd=0.01, metric="m", seed=0):
+    """One metric responding by `strong` to perturbation `a` and by `weak` to `b`."""
+    return pd.concat(
+        [
+            synthetic_curve(lambda d, t=total: 1.0 - t * d, noise=sd, seed=seed, perturbation=name, metric=metric)
+            for name, total in (("a", strong), ("b", weak))
+        ],
+        ignore_index=True,
+    )
+
+
+def test_response_profile_shares_are_invariant_to_the_metric_scale():
+    """The load-bearing property: shares are a ratio within one row, so `sd_0` cancels.
+
+    Rescaling a metric multiplies its response and its noise together, which leaves
+    `range_over_noise` untouched but would break any normalisation that reintroduced `sd_0`. Shifting
+    it changes neither. Both are checked, since a scale-only test passes for the wrong reason.
+    """
+    curve = two_perturbation_curve(0.8, 0.2)
+    shares = meta.response_profile(curve).set_index("metric").loc["m", ["a", "b"]]
+
+    rescaled = curve.assign(value=curve["value"] * 100.0 + 7.0)
+    rescaled_shares = meta.response_profile(rescaled).set_index("metric").loc["m", ["a", "b"]]
+
+    np.testing.assert_allclose(rescaled_shares.to_numpy(float), shares.to_numpy(float), rtol=1e-6)
+    assert shares["a"] == pytest.approx(1.0)
+    assert shares["b"] == pytest.approx(0.25, rel=0.1), "the weaker response is a quarter of the peak"
+
+
+def test_response_profile_reports_the_peak_and_names_it():
+    profile = meta.response_profile(two_perturbation_curve(0.8, 0.2)).set_index("metric").loc["m"]
+
+    assert profile["peak_perturbation"] == "a"
+    assert profile["peak"] == pytest.approx(0.8 / profile["sd_0"], rel=0.05)
+    assert not profile["sd_0_degenerate"]
+
+
+def test_response_profile_flags_a_collapsed_noise_estimate_relatively():
+    """A tiny `sd_0` is degenerate only relative to the metric's own scale."""
+    degenerate = two_perturbation_curve(0.8, 0.2, sd=1e-9)
+    assert meta.response_profile(degenerate).set_index("metric").loc["m", "sd_0_degenerate"]
+
+    # An absolutely tiny `sd_0` on a metric that itself lives near 1e-6 is a perfectly good noise
+    # estimate. An absolute threshold would flag this one; the relative test must not.
+    small_scale = two_perturbation_curve(0.8, 0.2, sd=0.01)
+    small_scale = small_scale.assign(value=small_scale["value"] * 1e-6)
+    profile = meta.response_profile(small_scale).set_index("metric").loc["m"]
+
+    assert profile["sd_0"] < 1e-7, "the fixture is not actually small in absolute terms"
+    assert not profile["sd_0_degenerate"]
+
+
+def test_response_profile_handles_a_metric_that_never_moves(recwarn):
+    """All-zero shares and a zero peak, rather than a division by zero.
+
+    A metric that is constant has no noise either, so its `range_over_noise` is undefined rather than
+    zero, and every column downstream has to survive that.
+    """
+    flat = two_perturbation_curve(0.0, 0.0, sd=0.0)
+
+    profile = meta.response_profile(flat).set_index("metric").loc["m"]
+
+    assert profile[["a", "b"]].to_numpy(float).tolist() == [0.0, 0.0]
+    assert profile["peak"] == 0.0
+    assert profile["peak_perturbation"] is None
+    assert not [w for w in recwarn if issubclass(w.category, RuntimeWarning)]
