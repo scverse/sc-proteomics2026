@@ -175,6 +175,9 @@ perturbations = {
     "loading_offset": pert.InjectLoadingOffset(),  # cell size
     "batch_shift": pert.InjectBatchShift("sample"),  # batch
     "missing_mnar": pert.InjectMissing(mechanism="mnar"),  # missingness, hence imputation strength
+    # Structure held fixed, only the cell count falls -- stratified on the full celltype x sample
+    # table, not each margin, because the two are correlated here.
+    "subsample": pert.SubsampleCells(["celltype", "sample"]),
     # `sample` is confounded with `celltype` here -- GW13 is mostly IN-CGE and oRG -- so a global
     # permutation would destroy the batch x celltype table too. Permute within sample instead.
     "permute_celltype": pert.PermuteLabels("celltype", stratify_by="sample"),
@@ -230,6 +233,11 @@ curve.head()
 #   the denominator. A metric that is very reproducible while measuring the wrong thing scores well
 #   on it. Always read it next to `contrast`, which is what says whether the thing being measured is
 #   the thing you wanted.
+# - A response to `subsample` is **not** sensitivity. Nearest-neighbour and clustering estimators are
+#   biased by the number of cells, so they drift when the dataset shrinks even though its structure
+#   is untouched -- that is exactly what holding the composition fixed isolates. Read that column as
+#   "are this metric's values comparable between datasets of different size", which is a useful
+#   thing to know and a different question from the one the other columns answer.
 # - **That caveat bites here.** `point_cluster_distance` returns exactly 1.0000 at dose 0 -- the
 #   cluster centroids are defined on the reference space, so the two distance matrices agree to
 #   numerical precision -- which leaves `sd₀` around `1e-5` and sends its `range_over_noise` into the

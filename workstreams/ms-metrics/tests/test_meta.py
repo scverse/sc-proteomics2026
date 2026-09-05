@@ -6,12 +6,9 @@ from the simulation machinery: if `sweep` breaks, exactly one test fails.
 """
 
 import anndata as ad
-import matplotlib
 import numpy as np
 import pandas as pd
 import pytest
-
-matplotlib.use("Agg")
 
 from msmetrics import meta, plotting
 from msmetrics import perturbations as pert
@@ -51,6 +48,7 @@ def every_perturbation():
         "missing_mnar": pert.InjectMissing(mechanism="mnar"),
         "loading": pert.InjectLoadingOffset(),
         "dilute": pert.DiluteSignal("cell_type"),
+        "subsample": pert.SubsampleCells(["cell_type", "batch"], min_per_group=1),
     }
 
 
@@ -290,3 +288,68 @@ def test_response_shape_ignores_doses_the_metric_could_not_reach():
     everything_nan = synthetic_curve(lambda d: 1.0 - d)
     everything_nan["value"] = np.nan
     assert not np.isfinite(meta.response_shape(everything_nan).iloc[0]["dynamic_range"])
+
+
+def test_subsample_preserves_composition_and_nests_across_doses(adata):
+    """Composition is the thing held fixed, so it is the thing to assert on.
+
+    Stratifying on the cell type x batch table rather than on each margin matters when the two are
+    correlated, which is the usual case in plate-based proteomics.
+    """
+    subsample = pert.SubsampleCells(["cell_type", "batch"], min_per_group=1)
+    before = adata.obs.groupby(["cell_type", "batch"], observed=True).size()
+
+    out = subsample(adata, 0.5, np.random.default_rng(0))
+    after = out.obs.groupby(["cell_type", "batch"], observed=True).size()
+
+    assert out.n_obs == round(0.5 * adata.n_obs), "the dose is the fraction of cells removed"
+    np.testing.assert_allclose(after / after.sum(), before / before.sum(), atol=0.02)
+    assert out.uns["perturbation"]["realized"]["composition_drift"] < 0.02
+
+    light = subsample(adata, 0.3, np.random.default_rng(0))
+    heavy = subsample(adata, 0.6, np.random.default_rng(0))
+    assert set(heavy.obs_names) <= set(light.obs_names), "the kept cells are not nested across doses"
+
+
+def test_subsample_keeps_rare_strata_alive(adata):
+    """`min_per_group` beats the dose, and says so through the realized fraction."""
+    out = pert.SubsampleCells("cell_type", min_per_group=5)(adata, 1.0, np.random.default_rng(0))
+
+    assert out.obs["cell_type"].nunique() == adata.obs["cell_type"].nunique(), "a cell type vanished"
+    assert (out.obs["cell_type"].value_counts() >= 5).all()
+    assert out.uns["perturbation"]["realized"]["fraction_removed"] < 1.0
+
+    with pytest.raises(ValueError, match="min_per_group"):
+        pert.SubsampleCells("cell_type", min_per_group=0)
+
+
+@pytest.mark.parametrize(
+    "perturbation",
+    [
+        pert.PermuteLabels("cell_type"),
+        pert.InjectBatchShift("cell_type"),
+        pert.DiluteSignal("cell_type"),
+        pert.SubsampleCells("cell_type"),
+    ],
+    ids=lambda p: type(p).__name__,
+)
+def test_missing_labels_are_rejected_rather_than_silently_skipped(adata, perturbation):
+    """A `nan` label compares unequal to itself, so those cells would escape the perturbation."""
+    adata.obs["cell_type"] = adata.obs["cell_type"].cat.add_categories(["?"]).fillna("?")
+    adata.obs.loc[adata.obs_names[:5], "cell_type"] = np.nan
+
+    with pytest.raises(ValueError, match="missing values"):
+        perturbation(adata, 0.5, np.random.default_rng(0))
+
+
+def test_a_plateau_is_saturation_not_a_monotonicity_violation():
+    """A response that rises and then flattens is monotone; the flat part is what `saturation_dose` is for."""
+    curve = synthetic_curve(lambda d: min(d, 0.5), noise=0.0)
+
+    shape = meta.response_shape(curve).iloc[0]
+    assert shape["monotone_fraction"] == 1.0, "a plateau was counted as a reversal"
+    # 90 % of a total change of 0.5 is reached at dose 0.45, before the curve flattens at 0.5.
+    assert shape["saturation_dose"] == pytest.approx(0.45, abs=1e-9)
+
+    reversing = synthetic_curve(lambda d: d if d <= 0.5 else 1.0 - d, noise=0.0)
+    assert meta.response_shape(reversing).iloc[0]["monotone_fraction"] < 1.0

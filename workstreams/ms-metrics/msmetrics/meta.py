@@ -37,9 +37,8 @@ so `msmetrics.variance_preservation` wraps in one lambda.
 
 Not built, and worth adding when the need appears: separate metric-level replicates and an ICC, to
 tell whether a metric's own seed noise exceeds its dose response; a confusion summary, asking whether
-a metric can distinguish *which* perturbation happened at matched damage; cell and feature subsampling
-as explicit coverage axes, which need their own framing because their trend is largely small-sample
-estimator bias rather than sensitivity; bootstrap intervals on the detection dose.
+a metric can distinguish *which* perturbation happened at matched damage; feature subsampling, the
+counterpart to `perturbations.SubsampleCells`; bootstrap intervals on the detection dose.
 """
 
 import random
@@ -432,7 +431,9 @@ def response_shape(curve: pd.DataFrame, *, saturation: float = 0.9) -> pd.DataFr
 
         if steps.size and np.any(steps != 0):
             direction = np.sign(total) if total != 0 else np.sign(steps[np.argmax(np.abs(steps))])
-            monotone = float(np.mean(np.sign(steps) == direction))
+            # A flat step is saturation, not a reversal, and saturation already has its own column.
+            # Counting plateaus against monotonicity would make every ceiling look like a violation.
+            monotone = float(np.mean(np.sign(steps) != -direction))
         else:
             monotone = float("nan")
 
