@@ -14,3 +14,6 @@ dist/
 
 # data
 data/
+
+# notebooks are tracked as jupytext py:percent scripts, the .ipynb is a local build artifact
+*.ipynb
