@@ -4,6 +4,7 @@ import warnings
 
 import alphapepttools as apt
 import matplotlib.pyplot as plt
+from scipy.stats import median_abs_deviation
 import numpy as np
 import scanpy as sc
 from scipy.stats import spearmanr
@@ -12,6 +13,27 @@ from anndata import AnnData
 from scipy.sparse import csr_matrix
 from sklearn.neighbors import NearestNeighbors
 
+
+def mad_outlier(values, n_mad=3.0, direction="both"):
+    """Boolean mask of values further than ``n_mad`` MADs from the median.
+
+    References
+    ----------
+    Heumos, L. et al. (2023). Best practices for single-cell analysis across
+    modalities. Nat Rev Genet 24, 550-572. https://doi.org/10.1038/s41576-023-00586-w
+    """
+    values = np.asarray(values, dtype=float)
+    median = np.nanmedian(values)
+    mad = median_abs_deviation(values, nan_policy="omit")
+    if mad == 0:
+        return ~np.isfinite(values)
+
+    deviation = {
+        "both": np.abs(values - median),
+        "up": values - median,
+        "down": median - values,
+    }[direction]
+    return (~np.isfinite(values)) | (deviation > n_mad * mad)
 
 def draw_missingness(
     X: np.ndarray,
