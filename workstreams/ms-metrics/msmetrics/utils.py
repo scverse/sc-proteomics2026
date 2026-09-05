@@ -1,7 +1,7 @@
 """Metrics for diagnosing the effect of imputation on single-cell proteomics data."""
 
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import alphapepttools as apt
 import matplotlib.pyplot as plt
@@ -126,7 +126,6 @@ def draw_ranked_median_intensities(
 
     fig, ax = plt.subplots(figsize=figsize)
     ax.plot(medians, marker="o")
-    ax.set_ylim(bottom=0)
     if xlabel:
         ax.set_xlabel(xlabel)
     if ylabel:
@@ -138,6 +137,136 @@ def draw_ranked_median_intensities(
         return fig
     else:
         plt.show()
+
+def diagnose_covariates(
+    adata: AnnData,
+    covariates: Sequence[str],
+    *,
+    n_comps: int = 10,
+    title: str | None = None,
+    pca_key: str = "X_bpca_obs",
+    pca_key_uns: str = "variance_bpca_obs",
+    figsize: tuple[float, float] = (4, 4),
+) -> dict[str, float]:
+    """Variance a set of covariates explains in the current state of the data.
+
+    Runs Bayesian PCA once and then principal component regression for every covariate, so the
+    same diagnostic can be dropped in before and after a processing step to see what that step
+    did to the structure of the dataset.
+
+    Note
+    ----
+    Principal component regression reports a *fraction* of the total variance present in the
+    matrix it was handed, and normalisation steps change that total. A step that removes a large
+    source of variance shrinks the denominator, so a covariate whose fraction stays flat has in
+    fact lost absolute variance. For that reason the returned dictionary carries `total_ss` and an
+    `<covariate>_absolute` entry alongside each fraction; compare the absolute numbers across
+    calls, not the fractions.
+
+    Covariates are read from `adata.obs` and are not recomputed here. When diagnosing a
+    normalization step, keep passing the covariate as it was measured *before* the step: a
+    covariate that the step drives to a constant by construction, such as the per-sample median
+    after median centering, regresses to zero trivially and says nothing.
+
+    Parameters
+    ----------
+    adata
+        The (annotated) data matrix of shape `n_obs` x `n_vars`. Modified in place by the BPCA
+        call, which writes its coordinates, loadings and variance decomposition into `adata`.
+    covariates
+        Column names in `adata.obs` to regress the principal components on. Each must be numeric
+        or categorical.
+    n_comps
+        Number of principal components to compute and to regress over.
+    title
+        Title of the bar plot. If None, no title is drawn.
+    pca_key
+        Key in `adata.obsm` holding the BPCA coordinates.
+    pca_key_uns
+        Key in `adata.uns` holding the BPCA variance decomposition.
+    figsize
+        Size of the bar plot in inches.
+
+    Returns
+    -------
+    dict
+        `total_ss`
+            Total sum of squares of the feature-centered matrix, the quantity the variance ratios
+            are normalised against.
+        `<covariate>`
+            Fraction of variance the covariate explains, in `[0, 1]`.
+        `<covariate>_absolute`
+            The same quantity as a sum of squares, `<covariate> * total_ss`.
+
+    Examples
+    --------
+    Diagnose a median centering step by calling the same function on either side of it:
+
+    .. code-block:: python
+
+        before = msm.utils.diagnose_covariates(
+            adata,
+            ["median_intensity", "celltype"],
+            title="Before median centering",
+        )
+
+        adata = adata.transpose()
+        apt.pp.scale_and_center(adata=adata, scaler="robust", scale=False, center=True)
+        adata = adata.transpose()
+
+        after = msm.utils.diagnose_covariates(
+            adata,
+            ["median_intensity", "celltype"],
+            title="After median centering",
+        )
+
+        print(before["celltype_absolute"], after["celltype_absolute"])
+
+    See Also
+    --------
+    :func:`alphapepttools.metrics.principal_component_regression`
+    :func:`alphapepttools.tl.bpca`
+    """
+    apt.tl.bpca(adata=adata, n_comps=n_comps)
+
+    # The same definition BPCA normalises its variance ratios against, so that the absolute
+    # numbers below are on the scale the fractions came from.
+    X = np.asarray(adata.X, dtype=float)
+    total_ss = float(np.nansum(np.square(X - np.nanmean(X, axis=0))))
+
+    fractions = {
+        covariate: float(
+            apt.metrics.principal_component_regression(
+                adata=adata,
+                covariate=covariate,
+                n_components=n_comps,
+                pca_key=pca_key,
+                pca_key_uns=pca_key_uns,
+            )
+        )
+        for covariate in covariates
+    }
+
+    print(f"Total sum of squares: {total_ss:.4g}", flush=True)
+    for covariate, fraction in fractions.items():
+        print(
+            f"Variance explained by {covariate}: {fraction * 100:.2f} % = {fraction * total_ss:.4g}",
+            flush=True,
+        )
+
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.bar(list(fractions), [fraction * 100 for fraction in fractions.values()])
+    ax.set_ylabel("Variance explained (% of total SS)")
+    if title:
+        ax.set_title(title)
+    plt.show()
+
+    result: dict[str, float] = {"total_ss": total_ss}
+    for covariate, fraction in fractions.items():
+        result[covariate] = fraction
+        result[f"{covariate}_absolute"] = fraction * total_ss
+    return result
+
 
 def variance_preservation(
     observed: np.ndarray,
