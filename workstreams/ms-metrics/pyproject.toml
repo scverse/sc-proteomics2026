@@ -25,9 +25,12 @@ dependencies = [
   "alphapepttools",
   "anndata",
   "gdown",
+  "igraph",
+  "matplotlib",
   "numpy",
   "pandas",
   "platformdirs>=4.11.7",
+  "scanpy",
   "scikit-learn",
   "scipy",
 ]
@@ -38,6 +41,7 @@ optional-dependencies.notebook = [
   "ipykernel",
   "ipywidgets",
   "jupytext",
+  "plottable",
 ]
 optional-dependencies.test = [
   "nbmake",

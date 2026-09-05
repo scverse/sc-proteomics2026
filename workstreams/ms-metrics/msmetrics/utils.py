@@ -227,6 +227,7 @@ def variance_preservation(
         "median_ratio": float(np.median(ratio[summarised])) if summarised.any() else float("nan"),
     }
 
+
 def perform_leiden_clustering(
     adata: AnnData,
     *,
@@ -262,11 +263,17 @@ def perform_leiden_clustering(
         resolution=resolution,
         random_state=random_state,
         key_added="_leiden",
+        # python-igraph's own implementation, which scanpy is moving to as its default. It needs an
+        # undirected graph and a fixed iteration count, and it keeps leidenalg off the dependency list.
+        flavor="igraph",
+        n_iterations=2,
+        directed=False,
     )
+
 
 def point_cluster_distance(adata: AnnData, before_layer: str, after_layer: str, cluster_key: str = "_leiden") -> float:
     """Point Cluster Distance (PCD).
-    
+
     Measures preservation of global cell-cell structure between `before`
     and `after` using distances from cells to cluster centroids.
 
@@ -296,6 +303,7 @@ def point_cluster_distance(adata: AnnData, before_layer: str, after_layer: str, 
         labels,
     )
 
+
 def _point_cluster_distance(
     before: csr_matrix,
     after: csr_matrix,
@@ -306,29 +314,23 @@ def _point_cluster_distance(
     Compute PCD given the before and after matrices and labels.
     """
     if before.shape[0] != after.shape[0]:
-        raise ValueError(
-            "`before` and `after` must contain the same number of cells."
-        )
+        raise ValueError("`before` and `after` must contain the same number of cells.")
 
     # Compute centroids in before and after using the cluster labels.
     n_clusters = np.unique(cluster_labels).shape[0]
+
     def centroids(x: csr_matrix) -> np.ndarray:
-        return np.vstack([
-            np.asarray(x[cluster_labels == cluster].mean(axis=0)).ravel()
-            for cluster in range(n_clusters)
-        ])
+        return np.vstack(
+            [np.asarray(x[cluster_labels == cluster].mean(axis=0)).ravel() for cluster in range(n_clusters)]
+        )
 
     before_centroids = centroids(before)
     after_centroids = centroids(after)
 
     # Distance from every cell to every centroid.
     # Shapes: (n_cells, n_clusters)
-    before_distances = pairwise_distances(
-        before, before_centroids, metric="euclidean"
-    )
-    after_distances = pairwise_distances(
-        after, after_centroids, metric="euclidean"
-    )
+    before_distances = pairwise_distances(before, before_centroids, metric="euclidean")
+    after_distances = pairwise_distances(after, after_centroids, metric="euclidean")
 
     # Compare the flattened PCD matrices using Spearman correlation.
     correlation = spearmanr(
@@ -337,6 +339,7 @@ def _point_cluster_distance(
     ).statistic
 
     return float(correlation)
+
 
 def _knn_adjacency(embedding: np.ndarray, n_neighbors: int) -> csr_matrix:
     """Binary observations x observations adjacency of the `n_neighbors` nearest neighbours, excluding self."""
@@ -425,7 +428,7 @@ def neighborhood_preservation(
 
     Notes
     -----
-    The chance of random overlaps increases with neihborhood size and dataset size. 
+    The chance of random overlaps increases with neihborhood size and dataset size.
     Thus, this metric is not comparable between different datasets with different numbers of samples.
     """
     before = np.asarray(before)
