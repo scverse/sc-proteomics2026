@@ -24,8 +24,10 @@ dynamic = [ "version" ]
 dependencies = [
   "alphapepttools",
   "anndata",
+  "gdown",
   "numpy",
   "pandas",
+  "platformdirs>=4.11.7",
   "scikit-learn",
   "scipy",
 ]
@@ -35,6 +37,7 @@ optional-dependencies.dev = [
 optional-dependencies.notebook = [
   "ipykernel",
   "ipywidgets",
+  "jupytext",
 ]
 optional-dependencies.test = [
   "nbmake",
@@ -47,6 +50,11 @@ path = "msmetrics/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = [ "msmetrics" ]
+
+# Notebooks live in git as py:percent scripts and are paired to a local .ipynb, so Jupyter keeps
+# both in sync while only the diffable script is committed.
+[tool.jupytext]
+formats = "ipynb,py:percent"
 
 [tool.ruff]
 line-length = 120
