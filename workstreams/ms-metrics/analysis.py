@@ -65,8 +65,12 @@ utils.draw_missingness(
 )
 
 # Flag features that are more than 60 % missing
-number_of_samples = adata.shape[0]  # number of samples
-apt.pp.filter_data_completeness(adata=adata, max_missing_fraction=0.6, action="flag")
+print("--> Dropping too incomplete features", flush = True)
+apt.pp.filter_data_completeness(
+    adata = adata,
+    max_missing_fraction = 0.6,
+    action = "drop",
+)
 
 # Compute actual completeness in features
 apt.metrics.fraction_complete(
@@ -80,6 +84,11 @@ adata.obs["median_intensity"] = np.nanmedian(adata.X, axis=1)
 adata.obs["outlier"] = utils.mad_outlier(adata.obs["fraction_complete"], n_mad=3, direction="down") | utils.mad_outlier(
     adata.obs["median_intensity"], n_mad=3, direction="both"
 )
+
+# Remove outliers
+print("--> Dropping too outlier samples", flush = True)
+print(f"Removing {adata.obs['outlier'].sum()} outlier samples: more than 3 MADs from the median", flush = True)
+adata = adata[~adata.obs["outlier"]]
 
 # %%
 # ### 4. Normalization
