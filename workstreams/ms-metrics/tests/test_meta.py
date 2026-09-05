@@ -353,3 +353,71 @@ def test_a_plateau_is_saturation_not_a_monotonicity_violation():
 
     reversing = synthetic_curve(lambda d: d if d <= 0.5 else 1.0 - d, noise=0.0)
     assert meta.response_shape(reversing).iloc[0]["monotone_fraction"] < 1.0
+
+
+def profile_curve(responses, *, sd=0.05, seed=0, mean_0=1.0, n_replicates=20):
+    """Tidy frame where each metric falls by a given total under each perturbation.
+
+    The noise within each dose is centred, so the group means are exactly the requested response
+    while `sd_0` is still non-zero. That separates the property under test — that the shares do not
+    depend on the noise scale — from the sampling error of estimating a mean from 20 draws.
+    """
+    rng = np.random.default_rng(seed)
+    rows = []
+    for metric, totals in responses.items():
+        for perturbation, total in totals.items():
+            for dose in (0.0, 0.5, 1.0):
+                deviations = rng.normal(0, sd, n_replicates)
+                deviations -= deviations.mean()
+                rows.extend(
+                    (perturbation, dose, "fraction", replicate, metric, mean_0 - total * dose + deviation, np.nan, "")
+                    for replicate, deviation in enumerate(deviations)
+                )
+    return pd.DataFrame(rows, columns=meta.COLUMNS)
+
+
+def test_response_profile_shares_are_invariant_to_the_noise_scale():
+    """The load-bearing property: shares are a within-row ratio, so `sd_0` cancels exactly.
+
+    Rescaling a metric changes `dynamic_range` and `sd_0` together, so `range_over_noise` is
+    unchanged too — the sharper test is that a metric whose *noise* alone changes keeps its profile
+    while its peak moves. This fails the moment someone reintroduces an `sd_0` term into the shares.
+    """
+    responses = {"m": {"a": 0.1, "b": 0.4, "c": 0.0}}
+    quiet = meta.response_profile(profile_curve(responses, sd=0.01))
+    loud = meta.response_profile(profile_curve(responses, sd=0.05))
+
+    np.testing.assert_allclose(quiet[["a", "b", "c"]].to_numpy(), loud[["a", "b", "c"]].to_numpy(), atol=1e-12)
+    assert quiet["peak"].iloc[0] > 3 * loud["peak"].iloc[0], "peak should scale with the noise, shares should not"
+
+
+def test_response_profile_peak_names_its_perturbation_and_is_the_row_max():
+    profile = meta.response_profile(profile_curve({"m": {"a": 0.1, "b": 0.4, "c": 0.2}})).iloc[0]
+
+    assert profile["peak_perturbation"] == "b"
+    assert profile["b"] == pytest.approx(1.0)
+    assert profile["a"] < profile["c"] < profile["b"]
+    assert profile["peak"] == pytest.approx(
+        meta.response_shape(profile_curve({"m": {"a": 0.1, "b": 0.4, "c": 0.2}}))["range_over_noise"].max()
+    )
+
+
+def test_response_profile_flags_a_degenerate_reference_relative_to_scale():
+    """A metric pinned at the reference dose is flagged; a merely small-scaled one is not."""
+    pinned = profile_curve({"m": {"a": 0.4, "b": 0.1}}, sd=1e-9)
+    assert meta.response_profile(pinned)["sd_0_degenerate"].all()
+
+    # Same relative noise, a thousandth of the scale: not degenerate, just small.
+    small = profile_curve({"m": {"a": 0.4e-3, "b": 0.1e-3}}, sd=5e-5, mean_0=1e-3)
+    assert not meta.response_profile(small)["sd_0_degenerate"].any()
+
+    assert not meta.response_profile(profile_curve({"m": {"a": 0.4, "b": 0.1}}))["sd_0_degenerate"].any()
+
+
+def test_response_profile_handles_a_metric_that_never_moves():
+    profile = meta.response_profile(profile_curve({"still": {"a": 0.0, "b": 0.0}, "moving": {"a": 0.4, "b": 0.1}}))
+    still = profile[profile["metric"] == "still"].iloc[0]
+
+    assert still["peak"] == 0.0
+    assert still[["a", "b"]].to_numpy().tolist() == [0.0, 0.0]
+    assert pd.isna(still["peak_perturbation"]), "a metric that never moved has no peak perturbation"

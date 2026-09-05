@@ -17,3 +17,6 @@ data/
 
 # notebooks are tracked as jupytext py:percent scripts, the .ipynb is a local build artifact
 *.ipynb
+
+# rendered notebooks are build artifacts, like the .ipynb above
+analysis.html

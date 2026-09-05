@@ -50,6 +50,7 @@ from anndata import AnnData
 __all__ = [
     "null_control",
     "reference_noise",
+    "response_profile",
     "response_shape",
     "sensitivity",
     "specificity",
@@ -473,6 +474,82 @@ def _empty_shape(perturbation: str, metric: str, reference_dose: float) -> dict:
         "max_usable_dose": float("nan"),
         "reference_dose": reference_dose,
     }
+
+
+def response_profile(curve: pd.DataFrame, *, degenerate_below: float = 1e-4) -> pd.DataFrame:
+    """What each metric responds to, as a share of its own strongest response.
+
+    `response_shape`'s `range_over_noise` answers "how far did this metric move", which is only
+    comparable between metrics when every `sd_0` is a real noise estimate. This answers the question
+    a reader usually has first — *what is this metric measuring?* — by normalising each metric's
+    responses against its own largest one. Because that is a ratio taken within one row, `sd_0`
+    cancels out of it exactly, the same way it cancels out of `specificity`'s contrast.
+
+    Parameters
+    ----------
+    curve
+        Frame returned by `sweep`.
+    degenerate_below
+        Ratio of `sd_0` to `|mean_0|` under which the reference dose counts as degenerate. Relative
+        rather than absolute, because metrics sit on different scales.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per metric: one column per perturbation holding that perturbation's share of the
+        metric's peak response, in `[0, 1]`; `peak`, the metric's own largest `range_over_noise`;
+        `peak_perturbation`, which perturbation it belongs to; `sd_0`; and `sd_0_degenerate`.
+
+    Examples
+    --------
+    .. code-block:: python
+
+        profile = meta.response_profile(curve)
+        print(profile[["peak_perturbation", "peak", "sd_0_degenerate"]])
+
+    Notes
+    -----
+    The shares stay meaningful for a metric flagged by `sd_0_degenerate`, because `sd_0` cancels;
+    its `peak` does not, and should not be quoted. That asymmetry is the reason both are returned.
+
+    A degenerate reference dose is not a rounding artefact but a design property of the metric under
+    test. `point_cluster_distance` defines its clusters on the reference space, so at dose 0 it
+    compares that space against itself and returns exactly 1, leaving no noise for anything to be
+    standardised against and a `range_over_noise` that reads as a huge advantage when it is a
+    collapsed denominator.
+
+    A metric that never moved has a peak of 0, all-zero shares and a missing `peak_perturbation`,
+    rather than a division by zero.
+    """
+    shape = response_shape(curve)
+    metrics = [name for name in dict.fromkeys(curve["metric"]) if name in set(shape["metric"])]
+    perturbations = [name for name in dict.fromkeys(curve["perturbation"]) if name in set(shape["perturbation"])]
+
+    table = (
+        shape.pivot(index="metric", columns="perturbation", values="range_over_noise")
+        .reindex(index=metrics, columns=perturbations)
+        .astype(float)
+    )
+
+    responses = np.where(np.isfinite(table.to_numpy()), table.to_numpy(), 0.0)
+    peaks = responses.max(axis=1) if responses.size else np.zeros(0)
+    usable = peaks > _EPS
+
+    shares = np.zeros_like(responses)
+    np.divide(responses, peaks[:, None], out=shares, where=usable[:, None])
+
+    profile = pd.DataFrame(shares, index=table.index, columns=table.columns)
+    profile["peak"] = peaks
+    profile["peak_perturbation"] = [
+        table.columns[row.argmax()] if is_usable else None for row, is_usable in zip(responses, usable)
+    ]
+
+    noise = reference_noise(curve).set_index("metric").reindex(metrics)
+    profile["sd_0"] = noise["sd_0"].to_numpy()
+    scale = np.maximum(np.abs(noise["mean_0"].to_numpy()), _EPS)
+    profile["sd_0_degenerate"] = (noise["sd_0"].to_numpy() / scale) < degenerate_below
+
+    return profile.reset_index()
 
 
 def specificity(curve: pd.DataFrame, *, signal: str, nuisance: str) -> pd.DataFrame:
