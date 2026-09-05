@@ -25,6 +25,7 @@ dependencies = [
   "alphapepttools",
   "anndata",
   "gdown",
+  "matplotlib",
   "numpy",
   "pandas",
   "platformdirs>=4.11.7",

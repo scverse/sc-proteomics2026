@@ -2,7 +2,7 @@
 
 __version__ = "0.1.0"
 
-from msmetrics import datasets, utils
+from msmetrics import datasets, meta, perturbations, plotting, utils
 from msmetrics.utils import variance_preservation
 
-__all__ = ["datasets", "utils", "variance_preservation"]
+__all__ = ["datasets", "meta", "perturbations", "plotting", "utils", "variance_preservation"]
