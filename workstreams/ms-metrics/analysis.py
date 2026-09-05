@@ -298,7 +298,7 @@ curve.head()
 
 
 # %%
-def summarize(curve, *, signal, nuisance, null_curve=None, ax=None):
+def summarize(curve, *, signal, nuisance, null_curve=None, labels=None, ax=None):
     """One row per metric: what it responds to, how strongly, and whether it tracks biology.
 
     The response columns are each perturbation's share of that metric's own strongest response, so a
@@ -306,6 +306,10 @@ def summarize(curve, *, signal, nuisance, null_curve=None, ax=None):
     an unbounded scale. Being a ratio taken within one row, the shares do not depend on `sd_0`, which
     is what makes them comparable between metrics whose reference noise differs by orders of
     magnitude. The absolute scale survives as the single `peak` column.
+
+    `labels` maps perturbation names to the wording used in the header. The names are dictionary keys
+    chosen for code, and a reader of the figure should not have to decode `dilute_celltype` to work
+    out that the column means "the biological signal was removed".
     """
     import matplotlib.pyplot as plt
     from plottable import ColumnDefinition, Table
@@ -325,46 +329,56 @@ def summarize(curve, *, signal, nuisance, null_curve=None, ax=None):
     # `peak` is meaningless where the reference dose is degenerate, but the shares beside it are not,
     # because `sd_0` cancels out of a within-row ratio. Suppress only the column that is affected.
     table["peak"] = [
-        "sd0 ~ 0" if degenerate else f"{value:,.0f}x"
+        "no noise\nfloor" if degenerate else f"{value:,.0f}x"
         for value, degenerate in zip(profile["peak"], profile["sd_0_degenerate"])
     ]
     table["detects"] = detection[signal]
     table["contrast"] = contrast
     table["tracks_bio"] = [
-        "n/a" if not np.isfinite(value) else f"{'yes' if value > 0 else 'no'} ({value:+.2f})" for value in contrast
+        "moves for\nneither"
+        if not np.isfinite(value)
+        else f"{'biology' if value > 0 else 'the confound'}\n({value:+.2f})"
+        for value in contrast
     ]
     if null_curve is not None:
         table["null_p"] = meta.null_control(null_curve).set_index("metric")["p_value"]
     table = table.reset_index()
 
-    ax = ax if ax is not None else plt.subplots(figsize=(1.7 * len(table.columns), 1.0 + 0.6 * len(table)))[1]
+    ax = ax if ax is not None else plt.subplots(figsize=(1.8 * len(table.columns), 1.2 + 0.7 * len(table)))[1]
     shares = plt.get_cmap("Blues")
+    labels = labels or {}
 
     definitions = [
         ColumnDefinition("metric", width=2.4, textprops={"ha": "left", "weight": "bold"}),
         *[
             ColumnDefinition(
                 name,
-                title=name.replace("_", "\n"),
+                title=labels.get(name, name.replace("_", "\n")),
                 width=1.0,
-                group="responds to  (% of its own peak)",
+                group="what it notices  —  each damage as a % of this metric's own strongest response",
                 formatter=lambda v: f"{v:.0%}",
                 # Fixed [0, 1] domain, so a cell means the same thing in every row.
                 cmap=lambda v: shares(0.06 + 0.5 * v) if np.isfinite(v) else "#f2f2f2",
             )
             for name in responses
         ],
-        ColumnDefinition("peak", title="peak\nrange/noise", width=1.1, group="strength"),
-        ColumnDefinition("detects", title=f"detects\n{signal}", width=1.0, formatter="{:.3f}", group="sensitivity"),
+        # Only the response block gets a group header. A one-column group whose label is wider than
+        # its column just collides with its neighbour, so these say everything in the title instead.
+        ColumnDefinition("peak", title="strongest response\n(noise widths)", width=1.5),
+        ColumnDefinition(
+            "detects",
+            title=f"smallest '{labels.get(signal, signal)}'\nit can see",
+            width=1.5,
+            formatter=lambda v: "never" if not np.isfinite(v) else f"{v:.3f}",
+        ),
         ColumnDefinition(
             "tracks_bio",
-            title=f"vs {nuisance}",
-            width=1.3,
-            group="specificity",
+            title=f"moves more for\nbiology or {labels.get(nuisance, nuisance)}?",
+            width=1.7,
             text_cmap=centered_cmap(table["contrast"].fillna(0), cmap=plt.get_cmap("RdBu"), center=0),
         ),
         *(
-            [ColumnDefinition("null_p", title="p", width=0.7, formatter="{:.3f}", group="null")]
+            [ColumnDefinition("null_p", title="p when the labels\nare shuffled", width=1.4, formatter="{:.3f}")]
             if null_curve is not None
             else []
         ),
@@ -464,4 +478,14 @@ pl.null(null_curve, dose=1.0)
 # strength is a generic "something changed" alarm and cannot tell you *what* changed.
 
 # %%
-summarize(curve, signal="dilute_celltype", nuisance="loading_offset", null_curve=null_curve)
+# The header should read as English, not as the dictionary keys the perturbations happen to use.
+DAMAGE = {
+    "dilute_celltype": "biology\nerased",
+    "loading_offset": "cell size\nvaried",
+    "batch_shift": "batch effect\nadded",
+    "missing_mnar": "values\nmasked",
+    "subsample": "fewer\ncells",
+    "permute_celltype": "labels\nshuffled",
+}
+
+summarize(curve, signal="dilute_celltype", nuisance="loading_offset", null_curve=null_curve, labels=DAMAGE)
