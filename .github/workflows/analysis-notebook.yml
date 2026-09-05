@@ -1,0 +1,86 @@
+# Executes workstreams/ms-metrics/analysis.py and publishes the rendered notebook as an artifact, so
+# a change to a metric can be reviewed by looking at what it did rather than at the diff alone.
+#
+# Nothing is committed back. The notebook is tracked as a jupytext py:percent script and the .ipynb
+# is a build artifact, per workstreams/ms-metrics/.gitignore, and that stays true here.
+name: Render analysis notebook
+
+on:
+  push:
+    paths:
+      - "workstreams/ms-metrics/**"
+      - ".github/workflows/analysis-notebook.yml"
+  pull_request:
+    paths:
+      - "workstreams/ms-metrics/**"
+      - ".github/workflows/analysis-notebook.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: workstreams/ms-metrics
+    env:
+      MSMETRICS_DATA_DIR: ${{ github.workspace }}/.dataset-cache
+      # Deliberately no MPLBACKEND here. ipykernel installs matplotlib-inline, which is what puts the
+      # figures *into* the notebook; forcing Agg is headless-safe but silently renders a page with no
+      # plots on it (one image instead of seven). Agg belongs in tests/conftest.py, not here.
+      # The full sweep is 6 perturbations x 6 doses x 30 replicates with no parallelism, which is
+      # tens of minutes on a two-core runner. Render a cheaper version; analysis.py prints the
+      # parameters it used, and says to read a reduced run for whether something moved rather than
+      # for numbers worth quoting.
+      MSMETRICS_N_REPLICATES: "5"
+      MSMETRICS_NULL_REPLICATES: "20"
+      MSMETRICS_DOSES: "0,0.5,1.0"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Keyed on datasets.py because the download URL lives there, so changing it busts the cache.
+      # A file that is not HDF5 is rejected and deleted by datasets.wu2025 rather than cached, so a
+      # Google Drive error page cannot poison this.
+      - name: Cache the wu2025 dataset
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.MSMETRICS_DATA_DIR }}
+          key: wu2025-${{ hashFiles('workstreams/ms-metrics/msmetrics/datasets.py') }}
+
+      - name: Install
+        run: uv pip install --system -e '.[notebook]' nbconvert
+
+      - name: Render
+        run: |
+          jupytext --to ipynb --output analysis.ipynb analysis.py
+          jupyter nbconvert --execute --to html --output analysis.html analysis.ipynb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: analysis-notebook
+          path: |
+            workstreams/ms-metrics/analysis.html
+            workstreams/ms-metrics/analysis.ipynb
+
+      - name: Say where to find it
+        run: |
+          {
+            echo "### Rendered analysis notebook"
+            echo
+            echo "Download the **analysis-notebook** artifact from this run and open \`analysis.html\`."
+            echo
+            echo "Rendered with a reduced sweep: ${MSMETRICS_N_REPLICATES} replicates, doses ${MSMETRICS_DOSES}."
+            echo "Run \`analysis.py\` with no environment overrides for the full 30-replicate numbers."
+          } >> "$GITHUB_STEP_SUMMARY"

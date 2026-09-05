@@ -92,6 +92,7 @@ draw_missingness(
 # `celltype` or `sample` label at all. Both have to go before any of this means anything.
 
 # %%
+import os
 import warnings
 
 from sklearn.utils.extmath import randomized_svd
@@ -103,6 +104,14 @@ from msmetrics.utils import perform_leiden_clustering, point_cluster_distance
 
 MIN_COMPLETENESS = 0.2
 N_COMPONENTS = 15
+
+# The sweep is the expensive part, so CI renders a cheaper version of it. The defaults are the full
+# run; the environment only ever makes it smaller.
+N_REPLICATES = int(os.environ.get("MSMETRICS_N_REPLICATES", "30"))
+NULL_REPLICATES = int(os.environ.get("MSMETRICS_NULL_REPLICATES", "100"))
+DOSES = tuple(float(dose) for dose in os.environ.get("MSMETRICS_DOSES", "0,0.2,0.4,0.6,0.8,1.0").split(","))
+
+print(f"sweep: {len(DOSES)} doses {DOSES}, {N_REPLICATES} replicates, {NULL_REPLICATES} for the null control")
 
 labelled = adata[adata.obs["celltype"].notna() & adata.obs["sample"].notna()].copy()
 complete = np.isfinite(np.asarray(labelled.X, float)).mean(axis=0) >= MIN_COMPLETENESS
@@ -203,8 +212,8 @@ curve = meta.sweep(
     working,
     metrics,
     perturbations,
-    doses=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
-    n_replicates=30,
+    doses=DOSES,
+    n_replicates=N_REPLICATES,
     prepare=prepare,
     seed=0,
 )
@@ -397,16 +406,21 @@ pl.scorecard(curve, statistic="range_over_noise")
 # %% [markdown]
 # ### Null control
 #
-# The null control gets its own sweep: its p-value cannot fall below `1 / (n_replicates + 1)`, so
-# the 30 replicates above could never reach significance no matter how clearly a metric responded.
+# The null control gets its own sweep, at more replicates than the dose series above: its p-value
+# cannot fall below `1 / (n_replicates + 1)`, so a metric could never reach significance on the
+# replicate count used for the curves no matter how clearly it responded.
+#
+# A reduced render -- see the parameters printed above -- estimates `sd_0` from few replicates, and
+# every standardised column inherits that. Read a cheap run for *whether* something moved, and the
+# full 30-replicate run for numbers worth quoting.
 
 # %%
 null_curve = meta.sweep(
     working,
     metrics,
     {"permute_celltype": pert.PermuteLabels("celltype", stratify_by="sample")},
-    doses=(0.0, 1.0),
-    n_replicates=100,
+    doses=(DOSES[0], DOSES[-1]),
+    n_replicates=NULL_REPLICATES,
     prepare=prepare,
     seed=0,
 )
