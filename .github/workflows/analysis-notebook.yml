@@ -68,7 +68,11 @@ jobs:
       - name: Render
         run: |
           jupytext --to ipynb --output analysis.ipynb analysis.py
-          jupyter nbconvert --execute --to html --output analysis.html analysis.ipynb
+          # nbconvert 7 already defaults this to None, i.e. no per-cell limit -- pinned so a future
+          # change of that default cannot start killing the sweep cell mid-render. The real ceiling
+          # is this job's timeout-minutes.
+          jupyter nbconvert --execute --to html --output analysis.html analysis.ipynb \
+            --ExecutePreprocessor.timeout=1800
 
       - uses: actions/upload-artifact@v5
         with:

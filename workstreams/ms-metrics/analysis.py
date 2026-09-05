@@ -128,7 +128,11 @@ N_COMPONENTS = 15
 # run; the environment only ever makes it smaller.
 N_REPLICATES = int(os.environ.get("MSMETRICS_N_REPLICATES", "30"))
 NULL_REPLICATES = int(os.environ.get("MSMETRICS_NULL_REPLICATES", "100"))
-DOSES = tuple(float(dose) for dose in os.environ.get("MSMETRICS_DOSES", "0,0.2,0.4,0.6,0.8,1.0").split(","))
+# Sorted and deduplicated, because the rest of the notebook reads DOSES[0] as the reference dose and
+# DOSES[-1] as the strongest, and this is unvalidated environment input.
+DOSES = tuple(sorted({float(dose) for dose in os.environ.get("MSMETRICS_DOSES", "0,0.2,0.4,0.6,0.8,1.0").split(",")}))
+if len(DOSES) < 2:
+    raise ValueError(f"MSMETRICS_DOSES needs at least two distinct doses, got {DOSES}.")
 
 print(f"sweep: {len(DOSES)} doses {DOSES}, {N_REPLICATES} replicates, {NULL_REPLICATES} for the null control")
 
@@ -328,18 +332,25 @@ def summarize(curve, *, signal, nuisance, null_curve=None, labels=None, ax=None)
     table = profile[responses].copy()
     # `peak` is meaningless where the reference dose is degenerate, but the shares beside it are not,
     # because `sd_0` cancels out of a within-row ratio. Suppress only the column that is affected.
-    table["peak"] = [
-        "no noise\nfloor" if degenerate else f"{value:,.0f}x"
-        for value, degenerate in zip(profile["peak"], profile["sd_0_degenerate"])
-    ]
+    table["peak"] = pd.Series(
+        [
+            "no noise\nfloor" if degenerate else f"{value:,.0f}x"
+            for value, degenerate in zip(profile["peak"], profile["sd_0_degenerate"])
+        ],
+        index=profile.index,
+    )
     table["detects"] = detection[signal]
     table["contrast"] = contrast
-    table["tracks_bio"] = [
-        "moves for\nneither"
-        if not np.isfinite(value)
-        else f"{'biology' if value > 0 else 'the confound'}\n({value:+.2f})"
-        for value in contrast
-    ]
+
+    def worded(value):
+        if not np.isfinite(value):
+            return "moves for\nneither"
+        return f"{'biology' if value > 0 else 'the confound'}\n({value:+.2f})"
+
+    # Mapped off the column rather than zipped over `contrast`. A list assigns by position while
+    # every other assignment here aligns by index, so a reordered `contrast` would silently have
+    # attached each metric's wording to a different row while the number beside it stayed right.
+    table["tracks_bio"] = table["contrast"].map(worded)
     if null_curve is not None:
         table["null_p"] = meta.null_control(null_curve).set_index("metric")["p_value"]
     table = table.reset_index()
