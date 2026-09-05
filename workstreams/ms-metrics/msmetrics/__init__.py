@@ -4,7 +4,6 @@ __version__ = "0.1.0"
 
 from msmetrics import datasets, meta, perturbations, plotting, utils
 from msmetrics.utils import (
-    SCIB_METRICS,
     bras,
     clisi_knn,
     compute_neighborhood_preservation,
@@ -25,7 +24,6 @@ from msmetrics.utils import (
 )
 
 __all__ = [
-    "SCIB_METRICS",
     "bras",
     "clisi_knn",
     "compute_neighborhood_preservation",
